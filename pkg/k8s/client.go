@@ -5,10 +5,12 @@ import (
         "context"
         "fmt"
         "io"
+        "log"
         "os"
         "path/filepath"
         "runtime"
         "strings"
+        "time"
 
         corev1 "k8s.io/api/core/v1"
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -223,10 +225,17 @@ func (c *Client) ListPVCs(ctx context.Context, namespace string) ([]PVCInfo, err
         return pvcs, nil
 }
 
-func (c *Client) findPodForPVC(ctx context.Context, namespace, pvcName string) (string, string, error) {
+type podPVCInfo struct {
+        podName       string
+        containerName string
+        mountPath     string
+        volumeName    string
+}
+
+func (c *Client) findPodForPVC(ctx context.Context, namespace, pvcName string) (*podPVCInfo, error) {
         podList, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
         if err != nil {
-                return "", "", err
+                return nil, err
         }
 
         for _, pod := range podList.Items {
@@ -238,7 +247,12 @@ func (c *Client) findPodForPVC(ctx context.Context, namespace, pvcName string) (
                                 for _, container := range pod.Spec.Containers {
                                         for _, mount := range container.VolumeMounts {
                                                 if mount.Name == vol.Name {
-                                                        return pod.Name, mount.MountPath, nil
+                                                        return &podPVCInfo{
+                                                                podName:       pod.Name,
+                                                                containerName: container.Name,
+                                                                mountPath:     mount.MountPath,
+                                                                volumeName:    vol.Name,
+                                                        }, nil
                                                 }
                                         }
                                 }
@@ -246,20 +260,23 @@ func (c *Client) findPodForPVC(ctx context.Context, namespace, pvcName string) (
                 }
         }
 
-        return "", "", fmt.Errorf("no running pod found mounting PVC %s", pvcName)
+        return nil, fmt.Errorf("no running pod found mounting PVC %s", pvcName)
 }
 
-func (c *Client) execInPod(ctx context.Context, namespace, podName string, command []string) (string, string, error) {
+func (c *Client) execInPod(ctx context.Context, namespace, podName, containerName string, command []string) (string, string, error) {
+        execOpts := &corev1.PodExecOptions{
+                Command:   command,
+                Stdout:    true,
+                Stderr:    true,
+                Container: containerName,
+        }
+
         req := c.clientset.CoreV1().RESTClient().Post().
                 Resource("pods").
                 Name(podName).
                 Namespace(namespace).
                 SubResource("exec").
-                VersionedParams(&corev1.PodExecOptions{
-                        Command: command,
-                        Stdout:  true,
-                        Stderr:  true,
-                }, scheme.ParameterCodec)
+                VersionedParams(execOpts, scheme.ParameterCodec)
 
         exec, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
         if err != nil {
@@ -275,9 +292,83 @@ func (c *Client) execInPod(ctx context.Context, namespace, podName string, comma
         return stdout.String(), stderr.String(), err
 }
 
-func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, mountPath, path string) ([]FileInfo, error) {
+func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volumeName string) (string, error) {
+        helperName := fmt.Sprintf("kube-browser-helper-%s", pvcName)
+
+        _ = c.clientset.CoreV1().Pods(namespace).Delete(ctx, helperName, metav1.DeleteOptions{})
+        time.Sleep(2 * time.Second)
+
+        pod := &corev1.Pod{
+                ObjectMeta: metav1.ObjectMeta{
+                        Name:      helperName,
+                        Namespace: namespace,
+                        Labels: map[string]string{
+                                "app":        "kube-browser-helper",
+                                "managed-by": "kube-browser",
+                        },
+                },
+                Spec: corev1.PodSpec{
+                        Containers: []corev1.Container{
+                                {
+                                        Name:    "helper",
+                                        Image:   "alpine:3.19",
+                                        Command: []string{"sleep", "300"},
+                                        VolumeMounts: []corev1.VolumeMount{
+                                                {
+                                                        Name:      "pvc-data",
+                                                        MountPath: "/data",
+                                                },
+                                        },
+                                },
+                        },
+                        Volumes: []corev1.Volume{
+                                {
+                                        Name: "pvc-data",
+                                        VolumeSource: corev1.VolumeSource{
+                                                PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+                                                        ClaimName: pvcName,
+                                                },
+                                        },
+                                },
+                        },
+                        RestartPolicy: corev1.RestartPolicyNever,
+                },
+        }
+
+        _, err := c.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
+        if err != nil {
+                return "", fmt.Errorf("failed to create helper pod: %w", err)
+        }
+
+        for i := 0; i < 30; i++ {
+                time.Sleep(2 * time.Second)
+                p, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, helperName, metav1.GetOptions{})
+                if err != nil {
+                        continue
+                }
+                if p.Status.Phase == corev1.PodRunning {
+                        log.Printf("Helper pod %s is running", helperName)
+                        return helperName, nil
+                }
+                log.Printf("Waiting for helper pod %s (phase: %s)", helperName, p.Status.Phase)
+        }
+
+        _ = c.clientset.CoreV1().Pods(namespace).Delete(ctx, helperName, metav1.DeleteOptions{})
+        return "", fmt.Errorf("helper pod did not start in time")
+}
+
+func (c *Client) deleteHelperPod(ctx context.Context, namespace, podName string) {
+        err := c.clientset.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+        if err != nil {
+                log.Printf("Warning: failed to delete helper pod %s: %v", podName, err)
+        } else {
+                log.Printf("Deleted helper pod %s", podName)
+        }
+}
+
+func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, _, err := c.execInPod(ctx, namespace, podName, []string{
+        stdout, _, err := c.execInPod(ctx, namespace, podName, containerName, []string{
                 "ls", "-la", "--time-style=long-iso", fullPath,
         })
         if err != nil {
@@ -320,9 +411,9 @@ func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, mountPa
         return files, nil
 }
 
-func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, mountPath, path string) ([]FileInfo, error) {
+func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, _, err := c.execInPod(ctx, namespace, podName, []string{
+        stdout, _, err := c.execInPod(ctx, namespace, podName, containerName, []string{
                 "ls", "-la", fullPath,
         })
         if err != nil {
@@ -380,9 +471,9 @@ func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, mount
         return files, nil
 }
 
-func (c *Client) listFilesFind(ctx context.Context, namespace, podName, mountPath, path string) ([]FileInfo, error) {
+func (c *Client) listFilesFind(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, _, err := c.execInPod(ctx, namespace, podName, []string{
+        stdout, _, err := c.execInPod(ctx, namespace, podName, containerName, []string{
                 "sh", "-c", fmt.Sprintf("find '%s' -maxdepth 1 -mindepth 1 -exec stat -c '%%n|%%s|%%Y|%%F' {} \\; 2>/dev/null || find '%s' -maxdepth 1 -mindepth 1 -print", fullPath, fullPath),
         })
         if err != nil {
@@ -445,95 +536,145 @@ func (c *Client) listFilesFind(ctx context.Context, namespace, podName, mountPat
         return files, nil
 }
 
+func (c *Client) tryListFiles(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
+        log.Printf("Trying GNU ls on %s/%s (container: %s, mount: %s)", namespace, podName, containerName, mountPath)
+        files, err := c.listFilesGNUls(ctx, namespace, podName, containerName, mountPath, path)
+        if err == nil {
+                return files, nil
+        }
+        log.Printf("GNU ls failed: %v", err)
+
+        log.Printf("Trying BusyBox ls")
+        files, err = c.listFilesBusybox(ctx, namespace, podName, containerName, mountPath, path)
+        if err == nil {
+                return files, nil
+        }
+        log.Printf("BusyBox ls failed: %v", err)
+
+        log.Printf("Trying find+stat")
+        files, err = c.listFilesFind(ctx, namespace, podName, containerName, mountPath, path)
+        if err == nil {
+                return files, nil
+        }
+        log.Printf("find+stat failed: %v", err)
+
+        return nil, fmt.Errorf("all listing methods failed on container %s", containerName)
+}
+
 func (c *Client) ListFiles(ctx context.Context, namespace, pvcName, path string) ([]FileInfo, error) {
-        podName, mountPath, err := c.findPodForPVC(ctx, namespace, pvcName)
+        info, err := c.findPodForPVC(ctx, namespace, pvcName)
         if err != nil {
                 return nil, err
         }
 
-        files, err := c.listFilesGNUls(ctx, namespace, podName, mountPath, path)
+        files, err := c.tryListFiles(ctx, namespace, info.podName, info.containerName, info.mountPath, path)
         if err == nil {
                 return files, nil
         }
 
-        files, err = c.listFilesBusybox(ctx, namespace, podName, mountPath, path)
-        if err == nil {
-                return files, nil
+        log.Printf("Direct exec failed, creating helper pod for PVC %s", pvcName)
+        helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName)
+        if helperErr != nil {
+                return nil, fmt.Errorf("direct exec failed (%v) and helper pod creation failed (%v)", err, helperErr)
         }
 
-        files, err = c.listFilesFind(ctx, namespace, podName, mountPath, path)
-        if err == nil {
-                return files, nil
+        files, helperErr = c.tryListFiles(ctx, namespace, helperName, "helper", "/data", path)
+
+        go c.deleteHelperPod(context.Background(), namespace, helperName)
+
+        if helperErr != nil {
+                return nil, fmt.Errorf("failed to list files even with helper pod: %v", helperErr)
         }
 
-        return nil, fmt.Errorf("failed to list files: all methods failed")
+        return files, nil
 }
 
-func (c *Client) DownloadFile(ctx context.Context, namespace, pvcName, filePath string) (io.Reader, string, error) {
-        podName, mountPath, err := c.findPodForPVC(ctx, namespace, pvcName)
-        if err != nil {
-                return nil, "", err
-        }
-
-        fullPath := filepath.Join(mountPath, filePath)
-        fileName := filepath.Base(filePath)
-
+func (c *Client) execInPodWithContainer(ctx context.Context, namespace, podName, containerName string, opts *corev1.PodExecOptions) (remotecommand.Executor, error) {
+        opts.Container = containerName
         req := c.clientset.CoreV1().RESTClient().Post().
                 Resource("pods").
                 Name(podName).
                 Namespace(namespace).
                 SubResource("exec").
-                VersionedParams(&corev1.PodExecOptions{
-                        Command: []string{"cat", fullPath},
-                        Stdout:  true,
-                        Stderr:  true,
-                }, scheme.ParameterCodec)
+                VersionedParams(opts, scheme.ParameterCodec)
 
-        exec, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
+        return remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
+}
+
+func (c *Client) DownloadFile(ctx context.Context, namespace, pvcName, filePath string) (io.Reader, string, error) {
+        info, err := c.findPodForPVC(ctx, namespace, pvcName)
         if err != nil {
                 return nil, "", err
         }
 
-        var stdout, stderr bytes.Buffer
-        err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
-                Stdout: &stdout,
-                Stderr: &stderr,
-        })
-        if err != nil {
-                return nil, "", fmt.Errorf("failed to download file: %s", stderr.String())
+        fullPath := info.mountPath + "/" + filePath
+        fileName := filepath.Base(filePath)
+        podName := info.podName
+        containerName := info.containerName
+
+        stdout, _, execErr := c.execInPod(ctx, namespace, podName, containerName, []string{"cat", fullPath})
+        if execErr != nil {
+                log.Printf("Direct download failed, trying helper pod")
+                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName)
+                if helperErr != nil {
+                        return nil, "", fmt.Errorf("download failed: %v", execErr)
+                }
+                defer func() {
+                        go c.deleteHelperPod(context.Background(), namespace, helperName)
+                }()
+                helperPath := "/data/" + filePath
+                stdout, _, execErr = c.execInPod(ctx, namespace, helperName, "helper", []string{"cat", helperPath})
+                if execErr != nil {
+                        return nil, "", fmt.Errorf("download failed even with helper pod: %v", execErr)
+                }
         }
 
-        return &stdout, fileName, nil
+        reader := strings.NewReader(stdout)
+        return reader, fileName, nil
 }
 
 func (c *Client) UploadFile(ctx context.Context, namespace, pvcName, destPath string, data io.Reader) error {
-        podName, mountPath, err := c.findPodForPVC(ctx, namespace, pvcName)
+        info, err := c.findPodForPVC(ctx, namespace, pvcName)
         if err != nil {
                 return err
         }
-
-        fullPath := filepath.Join(mountPath, destPath)
 
         var buf bytes.Buffer
         if _, err := io.Copy(&buf, data); err != nil {
                 return fmt.Errorf("failed to read upload data: %w", err)
         }
 
-        req := c.clientset.CoreV1().RESTClient().Post().
-                Resource("pods").
-                Name(podName).
-                Namespace(namespace).
-                SubResource("exec").
-                VersionedParams(&corev1.PodExecOptions{
-                        Command: []string{"tee", fullPath},
+        fullPath := info.mountPath + "/" + destPath
+        podName := info.podName
+        containerName := info.containerName
+
+        exec, execErr := c.execInPodWithContainer(ctx, namespace, podName, containerName, &corev1.PodExecOptions{
+                Command: []string{"tee", fullPath},
+                Stdin:   true,
+                Stdout:  true,
+                Stderr:  true,
+        })
+
+        if execErr != nil {
+                log.Printf("Direct upload failed, trying helper pod")
+                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName)
+                if helperErr != nil {
+                        return fmt.Errorf("upload failed: %v", execErr)
+                }
+                defer func() {
+                        go c.deleteHelperPod(context.Background(), namespace, helperName)
+                }()
+
+                helperPath := "/data/" + destPath
+                exec, execErr = c.execInPodWithContainer(ctx, namespace, helperName, "helper", &corev1.PodExecOptions{
+                        Command: []string{"tee", helperPath},
                         Stdin:   true,
                         Stdout:  true,
                         Stderr:  true,
-                }, scheme.ParameterCodec)
-
-        exec, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
-        if err != nil {
-                return err
+                })
+                if execErr != nil {
+                        return fmt.Errorf("upload failed even with helper pod: %v", execErr)
+                }
         }
 
         var stdout, stderr bytes.Buffer
