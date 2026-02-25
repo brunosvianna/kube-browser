@@ -1,0 +1,103 @@
+KubeBrowser started on http://localhost:5000
+2026/02/25 16:57:49 Opening in app mode: C:\Program Files\Google\Chrome\Application\chrome.exe
+2026/02/25 16:58:23 Trying GNU ls on rabbitmq/rabbitmq-0 (container: rabbitmq, mount: /opt/bitnami/rabbitmq/.rabbitmq/mnesia)
+2026/02/25 16:58:23   stderr: ls: cannot access '/opt/bitnami/rabbitmq/.rabbitmq/mnesia/\\': No such file or directory
+2026/02/25 16:58:23 GNU ls failed: command terminated with exit code 2
+2026/02/25 16:58:23 Trying BusyBox ls
+2026/02/25 16:58:23   stderr: ls: cannot access '/opt/bitnami/rabbitmq/.rabbitmq/mnesia/\\': No such file or directory
+2026/02/25 16:58:23 BusyBox ls failed: command terminated with exit code 2
+2026/02/25 16:58:23 Trying find+stat
+2026/02/25 16:58:24   stderr: find: ‘/opt/bitnami/rabbitmq/.rabbitmq/mnesia/\\\\’: No such file or directory
+2026/02/25 16:58:24 find+stat failed: command terminated with exit code 1
+2026/02/25 16:58:24 Direct exec failed, creating helper pod for PVC data-rabbitmq-0 on node aks-odappsv4-11392766-vmss000047
+2026/02/25 16:58:26 Creating helper pod kube-browser-helper-data-rabbitmq-0 on node aks-odappsv4-11392766-vmss000047 for PVC data-rabbitmq-0
+2026/02/25 16:58:28 Helper pod kube-browser-helper-data-rabbitmq-0 is running
+2026/02/25 16:58:28 Trying GNU ls on rabbitmq/kube-browser-helper-data-rabbitmq-0 (container: helper, mount: /data)
+2026/02/25 16:58:28   stderr: ls: unrecognized option: time-style=long-iso
+BusyBox v1.36.1 (2025-08-05 16:46:20 UTC) multi-call binary.
+
+Usage: ls [-1AaCxdLHRFplinshrSXvctu] [-w WIDTH] [FILE]...
+
+List directory contents
+
+        -1      One column output
+        -a      Include names starting with .
+        -A      Like -a, but exclude . and ..
+        -x      List by lines
+        -d      List directory names, not contents
+        -L      Follow symlinks
+        -H      Follow symlinks on command line
+        -R      Recurse
+        -p      Append / to directory names
+        -F      Append indicator (one of */=@|) to names
+        -l      Long format
+        -i      List inode numbers
+        -n      List numeric UIDs and GIDs instead of names
+        -s      List allocated blocks
+        -lc     List ctime
+        -lu     List atime
+        --full-time     List full date/time
+        -h      Human readable sizes (1K 243M 2G)
+        --group-directories-first
+        -S      Sort by size
+        -X      Sort by extension
+        -v      Sort by version
+        -t      Sort by mtime
+        -tc     Sort by ctime
+        -tu     Sort by atime
+        -r      Reverse sort order
+        -w N    Format N columns wide
+        --color[={always,never,auto}]
+2026/02/25 16:58:28 GNU ls failed: command terminated with exit code 1
+2026/02/25 16:58:28 Trying BusyBox ls
+2026/02/25 16:58:29   stderr: ls: /data/\\: No such file or directory
+2026/02/25 16:58:29 BusyBox ls failed: command terminated with exit code 1
+2026/02/25 16:58:29 Trying find+stat
+2026/02/25 16:58:29   stderr: find: /data/\\: No such file or directory
+2026/02/25 16:58:29 find+stat failed: command terminated with exit code 1
+2026/02/25 16:58:29 Deleted helper pod kube-browser-helper-data-rabbitmq-0
+2026/02/25 16:58:40 Trying GNU ls on rabbitmq/kube-browser-helper-data-rabbitmq-0 (container: helper, mount: /data)
+2026/02/25 16:58:40   stderr: ls: unrecognized option: time-style=long-iso
+BusyBox v1.36.1 (2025-08-05 16:46:20 UTC) multi-call binary.
+
+Usage: ls [-1AaCxdLHRFplinshrSXvctu] [-w WIDTH] [FILE]...
+
+List directory contents
+
+        -1      One column output
+        -a      Include names starting with .
+        -A      Like -a, but exclude . and ..
+        -x      List by lines
+        -d      List directory names, not contents
+        -L      Follow symlinks
+        -H      Follow symlinks on command line
+        -R      Recurse
+        -p      Append / to directory names
+        -F      Append indicator (one of */=@|) to names
+        -l      Long format
+        -i      List inode numbers
+        -n      List numeric UIDs and GIDs instead of names
+        -s      List allocated blocks
+        -lc     List ctime
+        -lu     List atime
+        --full-time     List full date/time
+        -h      Human readable sizes (1K 243M 2G)
+        --group-directories-first
+        -S      Sort by size
+        -X      Sort by extension
+        -v      Sort by version
+        -t      Sort by mtime
+        -tc     Sort by ctime
+        -tu     Sort by atime
+        -r      Reverse sort order
+        -w N    Format N columns wide
+        --color[={always,never,auto}]
+2026/02/25 16:58:40 GNU ls failed: command terminated with exit code 1
+2026/02/25 16:58:40 Trying BusyBox ls
+2026/02/25 16:58:40   stderr: ls: /data/\\: No such file or directory
+2026/02/25 16:58:40 BusyBox ls failed: command terminated with exit code 1
+2026/02/25 16:58:40 Trying find+stat
+2026/02/25 16:58:41   stderr: find: /data/\\: No such file or directory
+2026/02/25 16:58:41 find+stat failed: command terminated with exit code 1
+2026/02/25 16:58:41 Direct exec failed, creating helper pod for PVC data-rabbitmq-0 on node aks-odappsv4-11392766-vmss000047
+2026/02/25 16:58:43 Creating helper pod kube-browser-helper-data-rabbitmq-0 on node aks-odappsv4-11392766-vmss000047 for PVC data-rabbitmq-0

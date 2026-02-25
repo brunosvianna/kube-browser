@@ -8,6 +8,7 @@ import (
         "log"
         "net/http"
         "os"
+        "path"
         "path/filepath"
         "runtime"
         "strings"
@@ -18,7 +19,8 @@ import (
 )
 
 func sanitizePath(p string) string {
-        cleaned := filepath.Clean("/" + p)
+        p = strings.ReplaceAll(p, "\\", "/")
+        cleaned := path.Clean("/" + p)
         if strings.Contains(cleaned, "..") {
                 return "/"
         }
@@ -320,10 +322,11 @@ func (h *Handler) UploadFileHandler(w http.ResponseWriter, r *http.Request) {
         defer file.Close()
 
         destPath = sanitizePath(destPath)
+        fileName := path.Base(strings.ReplaceAll(header.Filename, "\\", "/"))
         if destPath == "" || destPath == "/" {
-                destPath = "/" + filepath.Base(header.Filename)
+                destPath = "/" + fileName
         } else {
-                destPath = destPath + "/" + filepath.Base(header.Filename)
+                destPath = destPath + "/" + fileName
         }
 
         err = client.UploadFile(r.Context(), namespace, pvc, destPath, file)
