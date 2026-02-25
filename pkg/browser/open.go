@@ -1,12 +1,14 @@
 package browser
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -33,16 +35,44 @@ func openAppMode(browserPath, url string) error {
 		return err
 	}
 
+	done := make(chan error, 1)
 	go func() {
-		cmd.Wait()
+		done <- cmd.Wait()
 	}()
 
-	time.Sleep(300 * time.Millisecond)
-
-	if cmd.Process != nil {
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("browser exited with error: %w", err)
+		}
+		return nil
+	case <-time.After(2 * time.Second):
 		return nil
 	}
-	return fmt.Errorf("browser process exited immediately")
+}
+
+func runAndCheck(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	done := make(chan error, 1)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start %s: %w", name, err)
+	}
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("%s failed: %w (stderr: %s)", name, err, strings.TrimSpace(stderr.String()))
+		}
+		return nil
+	case <-time.After(5 * time.Second):
+		return nil
+	}
 }
 
 func Open(url string) error {
@@ -79,8 +109,7 @@ func openWindows(url string) error {
 	}
 
 	log.Printf("Falling back to default browser")
-	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	return cmd.Start()
+	return runAndCheck("rundll32", "url.dll,FileProtocolHandler", url)
 }
 
 func openDarwin(url string) error {
@@ -99,8 +128,7 @@ func openDarwin(url string) error {
 	}
 
 	log.Printf("Falling back to 'open' command")
-	cmd := exec.Command("open", url)
-	return cmd.Start()
+	return runAndCheck("open", url)
 }
 
 func openLinux(url string) error {
@@ -112,6 +140,7 @@ func openLinux(url string) error {
 		"microsoft-edge",
 		"microsoft-edge-stable",
 		"brave-browser",
+		"firefox",
 	}
 
 	if browser := findBrowser(candidates); browser != "" {
@@ -119,19 +148,32 @@ func openLinux(url string) error {
 		if err := openAppMode(browser, url); err == nil {
 			return nil
 		}
+		log.Printf("App mode failed, trying normal mode: %s", browser)
+		if err := runAndCheck(browser, url); err == nil {
+			return nil
+		}
 	}
 
-	if p, err := exec.LookPath("xdg-open"); err == nil {
-		log.Printf("Falling back to xdg-open: %s", p)
-		cmd := exec.Command("xdg-open", url)
-		return cmd.Start()
+	openers := []string{"xdg-open", "sensible-browser", "x-www-browser", "gnome-open"}
+	for _, opener := range openers {
+		if p, err := exec.LookPath(opener); err == nil {
+			log.Printf("Trying %s: %s", opener, p)
+			if err := runAndCheck(opener, url); err == nil {
+				return nil
+			}
+			log.Printf("%s failed: %v", opener, err)
+		}
 	}
 
-	if p, err := exec.LookPath("sensible-browser"); err == nil {
-		log.Printf("Falling back to sensible-browser: %s", p)
-		cmd := exec.Command("sensible-browser", url)
-		return cmd.Start()
+	browsers := []string{"firefox", "chromium", "google-chrome", "brave-browser"}
+	for _, b := range browsers {
+		if p, err := exec.LookPath(b); err == nil {
+			log.Printf("Trying direct browser: %s", p)
+			if err := runAndCheck(b, url); err == nil {
+				return nil
+			}
+		}
 	}
 
-	return fmt.Errorf("no browser found")
+	return fmt.Errorf("no browser found - please open %s manually", url)
 }
