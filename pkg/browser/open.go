@@ -55,6 +55,7 @@ func runAndCheck(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	cmd.Env = os.Environ()
 
 	done := make(chan error, 1)
 	if err := cmd.Start(); err != nil {
@@ -132,7 +133,25 @@ func openDarwin(url string) error {
 }
 
 func openLinux(url string) error {
-	candidates := []string{
+	chromiumBrowsers := []string{
+		"google-chrome",
+		"google-chrome-stable",
+		"chromium",
+		"chromium-browser",
+		"microsoft-edge",
+		"microsoft-edge-stable",
+		"brave-browser",
+	}
+
+	if browser := findBrowser(chromiumBrowsers); browser != "" {
+		log.Printf("Opening in app mode: %s", browser)
+		if err := openAppMode(browser, url); err == nil {
+			return nil
+		}
+		log.Printf("App mode failed for %s", browser)
+	}
+
+	allBrowsers := []string{
 		"google-chrome",
 		"google-chrome-stable",
 		"chromium",
@@ -141,37 +160,43 @@ func openLinux(url string) error {
 		"microsoft-edge-stable",
 		"brave-browser",
 		"firefox",
+		"firefox-esr",
+		"/snap/bin/firefox",
+		"/snap/bin/chromium",
 	}
 
-	if browser := findBrowser(candidates); browser != "" {
-		log.Printf("Opening in app mode: %s", browser)
-		if err := openAppMode(browser, url); err == nil {
-			return nil
-		}
-		log.Printf("App mode failed, trying normal mode: %s", browser)
-		if err := runAndCheck(browser, url); err == nil {
-			return nil
+	for _, b := range allBrowsers {
+		if found := findBrowser([]string{b}); found != "" {
+			log.Printf("Trying browser: %s", found)
+			if err := runAndCheck(found, url); err == nil {
+				return nil
+			}
+			log.Printf("  failed: %v", found)
 		}
 	}
 
-	openers := []string{"xdg-open", "sensible-browser", "x-www-browser", "gnome-open"}
+	openers := []string{"xdg-open", "sensible-browser", "x-www-browser", "gnome-open", "kde-open"}
 	for _, opener := range openers {
 		if p, err := exec.LookPath(opener); err == nil {
-			log.Printf("Trying %s: %s", opener, p)
+			log.Printf("Trying opener: %s", p)
 			if err := runAndCheck(opener, url); err == nil {
 				return nil
 			}
-			log.Printf("%s failed: %v", opener, err)
+			log.Printf("  %s returned error: %v", opener, err)
 		}
 	}
 
-	browsers := []string{"firefox", "chromium", "google-chrome", "brave-browser"}
-	for _, b := range browsers {
-		if p, err := exec.LookPath(b); err == nil {
-			log.Printf("Trying direct browser: %s", p)
-			if err := runAndCheck(b, url); err == nil {
-				return nil
-			}
+	if p, err := exec.LookPath("python3"); err == nil {
+		log.Printf("Trying python3 webbrowser module")
+		if err := runAndCheck(p, "-m", "webbrowser", url); err == nil {
+			return nil
+		}
+	}
+
+	if p, err := exec.LookPath("python"); err == nil {
+		log.Printf("Trying python webbrowser module")
+		if err := runAndCheck(p, "-m", "webbrowser", url); err == nil {
+			return nil
 		}
 	}
 
