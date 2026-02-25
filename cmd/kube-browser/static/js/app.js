@@ -486,8 +486,100 @@ async function uploadFile(file) {
     }
 }
 
+let fileBrowserSelectedPath = '';
+
+async function openFileBrowser() {
+    const modal = $('#file-browser-modal');
+    modal.classList.remove('hidden');
+    const currentPath = $('#kubeconfig-path').value;
+    const dirPath = currentPath ? currentPath.replace(/[/\\][^/\\]*$/, '') : '';
+    await browseDir(dirPath);
+}
+
+async function browseDir(dirPath) {
+    try {
+        const params = dirPath ? `?path=${encodeURIComponent(dirPath)}` : '';
+        const res = await fetch(`/api/browse${params}`);
+        const data = await res.json();
+        if (!res.ok) {
+            showToast(data.error || 'Failed to browse', 'error');
+            return;
+        }
+
+        fileBrowserSelectedPath = '';
+        $('#file-browser-current-path').textContent = data.currentPath;
+
+        const driveDiv = $('#file-browser-drives');
+        if (data.drives && data.drives.length > 0) {
+            driveDiv.innerHTML = data.drives.map(d =>
+                `<button class="btn btn-secondary btn-small file-browser-drive" data-path="${d}">${d}</button>`
+            ).join(' ');
+            driveDiv.style.display = 'block';
+            driveDiv.querySelectorAll('.file-browser-drive').forEach(btn => {
+                btn.addEventListener('click', () => browseDir(btn.dataset.path));
+            });
+        } else {
+            driveDiv.style.display = 'none';
+        }
+
+        const list = $('#file-browser-list');
+        list.innerHTML = '';
+
+        if (data.entries) {
+            data.entries.forEach(entry => {
+                const item = document.createElement('div');
+                item.className = 'file-browser-item';
+                const icon = entry.isDir
+                    ? '<svg viewBox="0 0 20 20" width="16" height="16" fill="#f0c36d"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>'
+                    : '<svg viewBox="0 0 20 20" width="16" height="16" fill="#8ab4f8"><path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg>';
+                item.innerHTML = `${icon} <span>${entry.name}</span>`;
+
+                if (entry.isDir) {
+                    item.addEventListener('dblclick', () => browseDir(entry.path));
+                    item.addEventListener('click', () => {
+                        list.querySelectorAll('.file-browser-item').forEach(i => i.classList.remove('selected'));
+                        item.classList.add('selected');
+                        fileBrowserSelectedPath = entry.path;
+                    });
+                } else {
+                    item.addEventListener('click', () => {
+                        list.querySelectorAll('.file-browser-item').forEach(i => i.classList.remove('selected'));
+                        item.classList.add('selected');
+                        fileBrowserSelectedPath = entry.path;
+                    });
+                    item.addEventListener('dblclick', () => {
+                        fileBrowserSelectedPath = entry.path;
+                        selectBrowserFile();
+                    });
+                }
+
+                list.appendChild(item);
+            });
+        }
+    } catch (e) {
+        showToast('Failed to browse filesystem', 'error');
+    }
+}
+
+function selectBrowserFile() {
+    if (fileBrowserSelectedPath) {
+        $('#kubeconfig-path').value = fileBrowserSelectedPath;
+        $('#file-browser-modal').classList.add('hidden');
+        loadKubeconfig();
+    }
+}
+
+function closeFileBrowser() {
+    $('#file-browser-modal').classList.add('hidden');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     $('#load-kubeconfig-btn').addEventListener('click', loadKubeconfig);
+    $('#browse-kubeconfig-btn').addEventListener('click', openFileBrowser);
+
+    $('#file-browser-close').addEventListener('click', closeFileBrowser);
+    $('#file-browser-cancel').addEventListener('click', closeFileBrowser);
+    $('#file-browser-select').addEventListener('click', selectBrowserFile);
 
     $('#kubeconfig-path').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') loadKubeconfig();
