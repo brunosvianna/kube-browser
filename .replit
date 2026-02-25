@@ -1,6 +1,7 @@
-modules = ["go-1.25"]
+modules = ["go-1.25", "python-3.11", "nodejs-20"]
 [agent]
 expertMode = true
+integrations = ["github:1.0.0"]
 
 [workflows]
 runButton = "Project"
@@ -29,3 +30,6 @@ outputType = "webview"
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[nix]
+channel = "stable-25_05"
