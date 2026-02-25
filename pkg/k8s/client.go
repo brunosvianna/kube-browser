@@ -7,6 +7,7 @@ import (
         "io"
         "log"
         "os"
+        gopath "path"
         "path/filepath"
         "runtime"
         "strings"
@@ -297,8 +298,23 @@ func (c *Client) execInPod(ctx context.Context, namespace, podName, containerNam
 func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volumeName, nodeName string) (string, error) {
         helperName := fmt.Sprintf("kube-browser-helper-%s", pvcName)
 
-        _ = c.clientset.CoreV1().Pods(namespace).Delete(ctx, helperName, metav1.DeleteOptions{})
-        time.Sleep(2 * time.Second)
+        existing, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, helperName, metav1.GetOptions{})
+        if err == nil {
+                if existing.Status.Phase == corev1.PodRunning && existing.DeletionTimestamp == nil {
+                        log.Printf("Reusing existing helper pod %s", helperName)
+                        return helperName, nil
+                }
+                log.Printf("Deleting stale helper pod %s (phase: %s)", helperName, existing.Status.Phase)
+                _ = c.clientset.CoreV1().Pods(namespace).Delete(ctx, helperName, metav1.DeleteOptions{})
+                for i := 0; i < 30; i++ {
+                        time.Sleep(2 * time.Second)
+                        _, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, helperName, metav1.GetOptions{})
+                        if err != nil {
+                                break
+                        }
+                        log.Printf("Waiting for stale helper pod %s to be deleted...", helperName)
+                }
+        }
 
         log.Printf("Creating helper pod %s on node %s for PVC %s", helperName, nodeName, pvcName)
 
@@ -340,7 +356,7 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
                 },
         }
 
-        _, err := c.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
+        _, err = c.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
         if err != nil {
                 return "", fmt.Errorf("failed to create helper pod: %w", err)
         }
@@ -576,6 +592,8 @@ func (c *Client) tryListFiles(ctx context.Context, namespace, podName, container
 }
 
 func (c *Client) ListFiles(ctx context.Context, namespace, pvcName, path string) ([]FileInfo, error) {
+        path = strings.ReplaceAll(path, "\\", "/")
+        path = strings.TrimSuffix(path, "/")
         info, err := c.findPodForPVC(ctx, namespace, pvcName)
         if err != nil {
                 return nil, err
@@ -616,13 +634,14 @@ func (c *Client) execInPodWithContainer(ctx context.Context, namespace, podName,
 }
 
 func (c *Client) DownloadFile(ctx context.Context, namespace, pvcName, filePath string) (io.Reader, string, error) {
+        filePath = strings.ReplaceAll(filePath, "\\", "/")
         info, err := c.findPodForPVC(ctx, namespace, pvcName)
         if err != nil {
                 return nil, "", err
         }
 
         fullPath := info.mountPath + "/" + filePath
-        fileName := filepath.Base(filePath)
+        fileName := gopath.Base(filePath)
         podName := info.podName
         containerName := info.containerName
 
@@ -648,6 +667,7 @@ func (c *Client) DownloadFile(ctx context.Context, namespace, pvcName, filePath 
 }
 
 func (c *Client) UploadFile(ctx context.Context, namespace, pvcName, destPath string, data io.Reader) error {
+        destPath = strings.ReplaceAll(destPath, "\\", "/")
         info, err := c.findPodForPVC(ctx, namespace, pvcName)
         if err != nil {
                 return err
