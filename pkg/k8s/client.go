@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -18,8 +20,10 @@ import (
 )
 
 type Client struct {
-	clientset  *kubernetes.Clientset
-	restConfig *rest.Config
+	clientset      *kubernetes.Clientset
+	restConfig     *rest.Config
+	KubeconfigPath string
+	ContextName    string
 }
 
 type PVCInfo struct {
@@ -41,13 +45,73 @@ type FileInfo struct {
 	Path    string `json:"path"`
 }
 
-func NewClient(kubeconfigPath string) (*Client, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+type KubeconfigInfo struct {
+	Contexts       []ContextInfo `json:"contexts"`
+	CurrentContext string        `json:"currentContext"`
+}
+
+type ContextInfo struct {
+	Name      string `json:"name"`
+	Cluster   string `json:"cluster"`
+	Namespace string `json:"namespace"`
+}
+
+func DefaultKubeconfigPath() string {
+	if p := os.Getenv("KUBECONFIG"); p != "" {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "windows" {
+		return filepath.Join(home, ".kube", "config")
+	}
+	return filepath.Join(home, ".kube", "config")
+}
+
+func ReadKubeconfig(kubeconfigPath string) (*KubeconfigInfo, error) {
+	if kubeconfigPath == "" {
+		kubeconfigPath = DefaultKubeconfigPath()
+	}
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("kubeconfig file not found: %s", kubeconfigPath)
+	}
+
+	config, err := clientcmd.LoadFromFile(kubeconfigPath)
 	if err != nil {
-		config, err = rest.InClusterConfig()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
-		}
+		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	info := &KubeconfigInfo{
+		CurrentContext: config.CurrentContext,
+	}
+
+	for name, ctx := range config.Contexts {
+		info.Contexts = append(info.Contexts, ContextInfo{
+			Name:      name,
+			Cluster:   ctx.Cluster,
+			Namespace: ctx.Namespace,
+		})
+	}
+
+	return info, nil
+}
+
+func NewClientWithContext(kubeconfigPath, contextName string) (*Client, error) {
+	if kubeconfigPath == "" {
+		kubeconfigPath = DefaultKubeconfigPath()
+	}
+
+	configOverrides := &clientcmd.ConfigOverrides{}
+	if contextName != "" {
+		configOverrides.CurrentContext = contextName
+	}
+
+	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath},
+		configOverrides,
+	).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -56,8 +120,10 @@ func NewClient(kubeconfigPath string) (*Client, error) {
 	}
 
 	return &Client{
-		clientset:  clientset,
-		restConfig: config,
+		clientset:      clientset,
+		restConfig:     config,
+		KubeconfigPath: kubeconfigPath,
+		ContextName:    contextName,
 	}, nil
 }
 
