@@ -48,13 +48,23 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
         run: |
-          go build -ldflags="-s -w" -o kube-browser-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/kube-browser/
+          go build -ldflags="-s -w" -o kube-browser${{ matrix.ext }} ./cmd/kube-browser/
+
+      - name: Package (tar.gz)
+        if: matrix.goos != 'windows'
+        run: |
+          tar -czf kube-browser-${{ matrix.suffix }}.tar.gz kube-browser
+
+      - name: Package (zip)
+        if: matrix.goos == 'windows'
+        run: |
+          zip kube-browser-${{ matrix.suffix }}.zip kube-browser${{ matrix.ext }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: kube-browser-${{ matrix.suffix }}
-          path: kube-browser-${{ matrix.suffix }}${{ matrix.ext }}
+          path: kube-browser-${{ matrix.suffix }}.*
 
   release:
     name: Create Release
