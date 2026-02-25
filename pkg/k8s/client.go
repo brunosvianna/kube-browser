@@ -230,6 +230,7 @@ type podPVCInfo struct {
         containerName string
         mountPath     string
         volumeName    string
+        nodeName      string
 }
 
 func (c *Client) findPodForPVC(ctx context.Context, namespace, pvcName string) (*podPVCInfo, error) {
@@ -252,6 +253,7 @@ func (c *Client) findPodForPVC(ctx context.Context, namespace, pvcName string) (
                                                                 containerName: container.Name,
                                                                 mountPath:     mount.MountPath,
                                                                 volumeName:    vol.Name,
+                                                                nodeName:      pod.Spec.NodeName,
                                                         }, nil
                                                 }
                                         }
@@ -292,11 +294,13 @@ func (c *Client) execInPod(ctx context.Context, namespace, podName, containerNam
         return stdout.String(), stderr.String(), err
 }
 
-func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volumeName string) (string, error) {
+func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volumeName, nodeName string) (string, error) {
         helperName := fmt.Sprintf("kube-browser-helper-%s", pvcName)
 
         _ = c.clientset.CoreV1().Pods(namespace).Delete(ctx, helperName, metav1.DeleteOptions{})
         time.Sleep(2 * time.Second)
+
+        log.Printf("Creating helper pod %s on node %s for PVC %s", helperName, nodeName, pvcName)
 
         pod := &corev1.Pod{
                 ObjectMeta: metav1.ObjectMeta{
@@ -308,6 +312,7 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
                         },
                 },
                 Spec: corev1.PodSpec{
+                        NodeName: nodeName,
                         Containers: []corev1.Container{
                                 {
                                         Name:    "helper",
@@ -368,10 +373,13 @@ func (c *Client) deleteHelperPod(ctx context.Context, namespace, podName string)
 
 func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, _, err := c.execInPod(ctx, namespace, podName, containerName, []string{
+        stdout, stderr, err := c.execInPod(ctx, namespace, podName, containerName, []string{
                 "ls", "-la", "--time-style=long-iso", fullPath,
         })
         if err != nil {
+                if stderr != "" {
+                        log.Printf("  stderr: %s", strings.TrimSpace(stderr))
+                }
                 return nil, err
         }
 
@@ -413,10 +421,13 @@ func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, contain
 
 func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, _, err := c.execInPod(ctx, namespace, podName, containerName, []string{
+        stdout, stderr, err := c.execInPod(ctx, namespace, podName, containerName, []string{
                 "ls", "-la", fullPath,
         })
         if err != nil {
+                if stderr != "" {
+                        log.Printf("  stderr: %s", strings.TrimSpace(stderr))
+                }
                 return nil, err
         }
 
@@ -473,10 +484,13 @@ func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, conta
 
 func (c *Client) listFilesFind(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, _, err := c.execInPod(ctx, namespace, podName, containerName, []string{
+        stdout, stderr, err := c.execInPod(ctx, namespace, podName, containerName, []string{
                 "sh", "-c", fmt.Sprintf("find '%s' -maxdepth 1 -mindepth 1 -exec stat -c '%%n|%%s|%%Y|%%F' {} \\; 2>/dev/null || find '%s' -maxdepth 1 -mindepth 1 -print", fullPath, fullPath),
         })
         if err != nil {
+                if stderr != "" {
+                        log.Printf("  stderr: %s", strings.TrimSpace(stderr))
+                }
                 return nil, err
         }
 
@@ -572,8 +586,8 @@ func (c *Client) ListFiles(ctx context.Context, namespace, pvcName, path string)
                 return files, nil
         }
 
-        log.Printf("Direct exec failed, creating helper pod for PVC %s", pvcName)
-        helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName)
+        log.Printf("Direct exec failed, creating helper pod for PVC %s on node %s", pvcName, info.nodeName)
+        helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName, info.nodeName)
         if helperErr != nil {
                 return nil, fmt.Errorf("direct exec failed (%v) and helper pod creation failed (%v)", err, helperErr)
         }
@@ -614,8 +628,8 @@ func (c *Client) DownloadFile(ctx context.Context, namespace, pvcName, filePath 
 
         stdout, _, execErr := c.execInPod(ctx, namespace, podName, containerName, []string{"cat", fullPath})
         if execErr != nil {
-                log.Printf("Direct download failed, trying helper pod")
-                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName)
+                log.Printf("Direct download failed, trying helper pod on node %s", info.nodeName)
+                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName, info.nodeName)
                 if helperErr != nil {
                         return nil, "", fmt.Errorf("download failed: %v", execErr)
                 }
@@ -656,8 +670,8 @@ func (c *Client) UploadFile(ctx context.Context, namespace, pvcName, destPath st
         })
 
         if execErr != nil {
-                log.Printf("Direct upload failed, trying helper pod")
-                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName)
+                log.Printf("Direct upload failed, trying helper pod on node %s", info.nodeName)
+                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName, info.nodeName)
                 if helperErr != nil {
                         return fmt.Errorf("upload failed: %v", execErr)
                 }
