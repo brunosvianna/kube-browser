@@ -8,7 +8,6 @@ import (
 	"os"
 
 	"kube-browser/pkg/handlers"
-	"kube-browser/pkg/k8s"
 )
 
 //go:embed all:static
@@ -23,30 +22,20 @@ func main() {
 		port = "5000"
 	}
 
-	kubeconfigPath := os.Getenv("KUBECONFIG")
-	if kubeconfigPath == "" {
-		home, _ := os.UserHomeDir()
-		kubeconfigPath = home + "/.kube/config"
-	}
-
-	client, err := k8s.NewClient(kubeconfigPath)
-	if err != nil {
-		log.Printf("WARNING: Could not connect to Kubernetes cluster: %v", err)
-		log.Printf("The application will start in demo mode. Set KUBECONFIG to connect to a real cluster.")
-		client = nil
-	}
-
-	h := handlers.New(client, staticFiles, templateFiles)
+	h := handlers.New(staticFiles, templateFiles)
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", h.IndexHandler)
+	mux.HandleFunc("/api/status", h.StatusHandler)
+	mux.HandleFunc("/api/kubeconfig", h.LoadKubeconfigHandler)
+	mux.HandleFunc("/api/connect", h.ConnectHandler)
+	mux.HandleFunc("/api/disconnect", h.DisconnectHandler)
 	mux.HandleFunc("/api/namespaces", h.ListNamespacesHandler)
 	mux.HandleFunc("/api/pvcs", h.ListPVCsHandler)
 	mux.HandleFunc("/api/files", h.ListFilesHandler)
 	mux.HandleFunc("/api/download", h.DownloadFileHandler)
 	mux.HandleFunc("/api/upload", h.UploadFileHandler)
-	mux.HandleFunc("/api/status", h.StatusHandler)
 	mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
 
 	fmt.Printf("KubeBrowser started on http://0.0.0.0:%s\n", port)

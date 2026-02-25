@@ -46,6 +46,11 @@ header {
     gap: 16px;
 }
 
+.header-right {
+    display: flex;
+    align-items: center;
+}
+
 .logo {
     display: flex;
     align-items: center;
@@ -140,6 +145,21 @@ select:focus {
 select:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+input[type="text"] {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+}
+
+input[type="text"]:focus {
+    border-color: var(--accent);
 }
 
 .pvc-list {
@@ -285,6 +305,39 @@ select:disabled {
     background: var(--bg-hover);
 }
 
+.btn-danger {
+    background: var(--danger);
+    color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+.btn-full {
+    width: 100%;
+    justify-content: center;
+    padding: 10px 14px;
+    font-size: 14px;
+    margin-top: 16px;
+}
+
+.btn-icon {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+}
+
+.btn-icon:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+
 .file-table-container {
     flex: 1;
     overflow-y: auto;
@@ -400,17 +453,31 @@ select:disabled {
     max-width: 90vw;
 }
 
+.modal-connection {
+    width: 420px;
+}
+
 .modal-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
+    gap: 12px;
+    padding: 20px 20px 16px;
     border-bottom: 1px solid var(--border);
+}
+
+.modal-header-icon {
+    flex-shrink: 0;
 }
 
 .modal-header h3 {
     font-size: 16px;
     font-weight: 600;
+}
+
+.modal-subtitle {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 2px;
 }
 
 .modal-close {
@@ -429,6 +496,47 @@ select:disabled {
 
 .modal-body {
     padding: 20px;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    text-align: center;
+}
+
+.form-row {
+    display: flex;
+    gap: 12px;
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+.input-with-btn {
+    display: flex;
+    gap: 6px;
+}
+
+.input-with-btn input {
+    flex: 1;
+}
+
+.connection-error {
+    padding: 10px 14px;
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid var(--danger);
+    border-radius: 6px;
+    color: var(--danger);
+    font-size: 13px;
+    margin-bottom: 8px;
 }
 
 .upload-zone {

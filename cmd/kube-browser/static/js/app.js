@@ -1,4 +1,5 @@
 const state = {
+    connected: false,
     namespace: '',
     pvc: '',
     currentPath: '/',
@@ -28,6 +29,152 @@ async function api(url, options = {}) {
     } catch (err) {
         showToast(err.message, 'error');
         throw err;
+    }
+}
+
+function setConnected(connected) {
+    state.connected = connected;
+    const indicator = $('#status-indicator');
+    const text = $('#status-text');
+    indicator.className = `status ${connected ? 'connected' : 'disconnected'}`;
+    text.textContent = connected ? 'Connected' : 'Disconnected';
+
+    const mainContent = $('#main-content');
+    const connectionModal = $('#connection-modal');
+
+    if (connected) {
+        mainContent.classList.remove('hidden');
+        connectionModal.classList.add('hidden');
+    } else {
+        mainContent.classList.add('hidden');
+        connectionModal.classList.remove('hidden');
+    }
+}
+
+async function loadKubeconfig() {
+    const pathInput = $('#kubeconfig-path');
+    const contextSelect = $('#context-select');
+    const nsSelect = $('#connect-namespace-select');
+    const connectBtn = $('#connect-btn');
+    const errorDiv = $('#connection-error');
+
+    errorDiv.classList.add('hidden');
+    contextSelect.disabled = true;
+    nsSelect.disabled = true;
+    connectBtn.disabled = true;
+    contextSelect.innerHTML = '<option value="">Loading...</option>';
+
+    try {
+        const data = await api('/api/kubeconfig', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: pathInput.value }),
+        });
+
+        contextSelect.innerHTML = '';
+        if (data.contexts && data.contexts.length > 0) {
+            data.contexts.forEach(ctx => {
+                const opt = document.createElement('option');
+                opt.value = ctx.name;
+                opt.textContent = ctx.name;
+                if (ctx.name === data.current) opt.selected = true;
+                contextSelect.appendChild(opt);
+            });
+            contextSelect.disabled = false;
+            connectBtn.disabled = false;
+
+            nsSelect.innerHTML = '<option value="">All namespaces</option>';
+            const selectedCtx = data.contexts.find(c => c.name === data.current) || data.contexts[0];
+            if (selectedCtx && selectedCtx.namespace) {
+                const opt = document.createElement('option');
+                opt.value = selectedCtx.namespace;
+                opt.textContent = selectedCtx.namespace;
+                opt.selected = true;
+                nsSelect.appendChild(opt);
+            }
+            nsSelect.disabled = false;
+        } else {
+            contextSelect.innerHTML = '<option value="">No contexts found</option>';
+        }
+    } catch (e) {
+        contextSelect.innerHTML = '<option value="">No contexts</option>';
+        errorDiv.textContent = e.message;
+        errorDiv.classList.remove('hidden');
+    }
+}
+
+async function connect() {
+    const kubeconfigPath = $('#kubeconfig-path').value;
+    const context = $('#context-select').value;
+    const errorDiv = $('#connection-error');
+    const connectBtn = $('#connect-btn');
+
+    errorDiv.classList.add('hidden');
+    connectBtn.disabled = true;
+    connectBtn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px"></div> Connecting...';
+
+    try {
+        const data = await api('/api/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                kubeconfigPath: kubeconfigPath,
+                context: context,
+            }),
+        });
+
+        setConnected(true);
+        showToast('Connected to Kubernetes cluster', 'success');
+
+        const nsSelect = $('#namespace-select');
+        nsSelect.innerHTML = '<option value="">Select namespace...</option>';
+        if (data.namespaces) {
+            data.namespaces.forEach(ns => {
+                const opt = document.createElement('option');
+                opt.value = ns;
+                opt.textContent = ns;
+                nsSelect.appendChild(opt);
+            });
+        }
+
+        const selectedNs = $('#connect-namespace-select').value;
+        if (selectedNs) {
+            nsSelect.value = selectedNs;
+            state.namespace = selectedNs;
+            loadPVCs(selectedNs);
+        }
+
+        $('#disconnect-btn').classList.remove('hidden');
+    } catch (e) {
+        errorDiv.textContent = e.message;
+        errorDiv.classList.remove('hidden');
+    } finally {
+        connectBtn.disabled = false;
+        connectBtn.innerHTML = `<svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+            <path d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-11a1 1 0 1 0-2 0v3.586L7.707 9.293a1 1 0 0 0-1.414 1.414l3 3a1 1 0 0 0 1.414 0l3-3a1 1 0 0 0-1.414-1.414L11 10.586V7z"/>
+        </svg> Connect`;
+    }
+}
+
+async function disconnect() {
+    try {
+        await api('/api/disconnect', { method: 'POST' });
+        setConnected(false);
+        showToast('Disconnected from cluster', 'info');
+
+        state.namespace = '';
+        state.pvc = '';
+        state.currentPath = '/';
+
+        $('#namespace-select').innerHTML = '<option value="">Select namespace...</option>';
+        $('#pvc-list').innerHTML = '<div class="empty-state">Select a namespace</div>';
+        $('#upload-btn').disabled = true;
+        $('#refresh-btn').disabled = true;
+
+        $('#disconnect-btn').classList.add('hidden');
+        $('#connect-btn').classList.remove('hidden');
+    } catch (e) {
+        showToast('Failed to disconnect', 'error');
     }
 }
 
@@ -340,13 +487,21 @@ async function uploadFile(file) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    $('#load-kubeconfig-btn').addEventListener('click', loadKubeconfig);
+
+    $('#kubeconfig-path').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') loadKubeconfig();
+    });
+
+    $('#connect-btn').addEventListener('click', connect);
+    $('#disconnect-btn').addEventListener('click', disconnect);
+
+    $('#connection-btn').addEventListener('click', () => {
+        const modal = $('#connection-modal');
+        modal.classList.toggle('hidden');
+    });
+
     const nsSelect = $('#namespace-select');
-    const statusEl = $('#status-indicator');
-
-    if (statusEl.classList.contains('connected')) {
-        loadNamespaces();
-    }
-
     nsSelect.addEventListener('change', (e) => {
         state.namespace = e.target.value;
         state.pvc = '';
@@ -376,4 +531,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     initUpload();
+
+    loadKubeconfig();
 });
