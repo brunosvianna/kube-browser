@@ -6,7 +6,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
+	"kube-browser/pkg/browser"
 	"kube-browser/pkg/handlers"
 )
 
@@ -38,6 +40,16 @@ func main() {
 	mux.HandleFunc("/api/upload", h.UploadFileHandler)
 	mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
 
-	fmt.Printf("KubeBrowser started on http://0.0.0.0:%s\n", port)
+	url := fmt.Sprintf("http://localhost:%s", port)
+	fmt.Printf("KubeBrowser started on %s\n", url)
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		if err := browser.Open(url); err != nil {
+			log.Printf("Could not open browser automatically: %v", err)
+			fmt.Printf("Open %s in your browser\n", url)
+		}
+	}()
+
 	log.Fatal(http.ListenAndServe("0.0.0.0:"+port, mux))
 }

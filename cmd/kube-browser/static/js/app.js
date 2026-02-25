@@ -531,6 +531,4 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     initUpload();
-
-    loadKubeconfig();
 });
