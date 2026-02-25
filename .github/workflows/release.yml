@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    name: Build ${{ matrix.suffix }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -19,18 +19,23 @@ jobs:
           - goos: linux
             goarch: amd64
             suffix: linux-amd64
+            archive: tar.gz
           - goos: linux
             goarch: arm64
             suffix: linux-arm64
+            archive: tar.gz
           - goos: darwin
             goarch: amd64
             suffix: darwin-amd64
+            archive: tar.gz
           - goos: darwin
             goarch: arm64
             suffix: darwin-arm64
+            archive: tar.gz
           - goos: windows
             goarch: amd64
             suffix: windows-amd64
+            archive: zip
             ext: .exe
 
     steps:
@@ -48,13 +53,34 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
         run: |
-          go build -ldflags="-s -w" -o kube-browser-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/kube-browser/
+          go build -ldflags="-s -w" -o kube-browser${{ matrix.ext }} ./cmd/kube-browser/
 
-      - name: Upload artifact
+      - name: Create tar.gz archive
+        if: matrix.archive == 'tar.gz'
+        run: |
+          chmod +x kube-browser
+          tar -czf kube-browser-${{ matrix.suffix }}.tar.gz kube-browser
+          ls -la kube-browser-${{ matrix.suffix }}.tar.gz
+
+      - name: Create zip archive
+        if: matrix.archive == 'zip'
+        run: |
+          zip kube-browser-${{ matrix.suffix }}.zip kube-browser${{ matrix.ext }}
+          ls -la kube-browser-${{ matrix.suffix }}.zip
+
+      - name: Upload artifact (tar.gz)
+        if: matrix.archive == 'tar.gz'
         uses: actions/upload-artifact@v4
         with:
           name: kube-browser-${{ matrix.suffix }}
-          path: kube-browser-${{ matrix.suffix }}${{ matrix.ext }}
+          path: kube-browser-${{ matrix.suffix }}.tar.gz
+
+      - name: Upload artifact (zip)
+        if: matrix.archive == 'zip'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kube-browser-${{ matrix.suffix }}
+          path: kube-browser-${{ matrix.suffix }}.zip
 
   release:
     name: Create Release
@@ -68,8 +94,13 @@ jobs:
         with:
           path: artifacts
 
+      - name: List artifacts
+        run: find artifacts -type f
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
