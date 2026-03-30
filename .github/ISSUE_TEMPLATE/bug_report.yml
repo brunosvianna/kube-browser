@@ -76,6 +76,7 @@ body:
         - k3s
         - minikube
         - kind
+        - WSL (Windows Subsystem for Linux)
         - Other managed cluster
         - Self-hosted
     validations:
