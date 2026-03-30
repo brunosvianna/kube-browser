@@ -94,7 +94,10 @@ func (h *Handler) jsonErrorFromErr(w http.ResponseWriter, err error, code int) {
                 })
                 return
         }
-        json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+        json.NewEncoder(w).Encode(map[string]string{
+                "error": err.Error(),
+                "kind":  string(k8s.ErrKindUnknown),
+        })
 }
 
 func (h *Handler) IndexHandler(w http.ResponseWriter, r *http.Request) {
