@@ -6,6 +6,7 @@ import (
         "fmt"
         "io"
         "log"
+        "net"
         "net/http"
         "os"
         "path"
@@ -51,6 +52,21 @@ func (h *Handler) setClient(c *k8s.Client) {
         h.mu.Lock()
         defer h.mu.Unlock()
         h.client = c
+}
+
+func (h *Handler) LocalhostOnly(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                ip, _, err := net.SplitHostPort(r.RemoteAddr)
+                if err != nil {
+                        http.Error(w, "Forbidden", http.StatusForbidden)
+                        return
+                }
+                if ip != "127.0.0.1" && ip != "::1" {
+                        http.Error(w, "Forbidden: only accessible from localhost", http.StatusForbidden)
+                        return
+                }
+                next.ServeHTTP(w, r)
+        })
 }
 
 func (h *Handler) jsonResponse(w http.ResponseWriter, data interface{}) {
