@@ -1,0 +1,11 @@
+Prioridade alta — eu corrigiria antes de divulgar forte
+Fechar a exposição de rede por padrão
+Hoje o README diz que o KubeBrowser roda localmente e “não expõe o cluster para a internet”, mas o servidor sobe em 0.0.0.0:<porta> e também publica /api/browse, que navega no filesystem local da máquina. Eu mudaria o bind padrão para 127.0.0.1, deixaria HOST configurável só para casos avançados, e trocaria o ListenAndServe cru por http.Server com timeouts e shutdown gracioso.
+Parar de usar uma conexão global única para toda a aplicação
+O Handler mantém um único *k8s.Client em memória, e o ConnectHandler faz h.setClient(client). Na prática, isso significa que a conexão atual fica global para o processo inteiro. Para uso de comunidade, eu isolaria estado por sessão/perfil, para não correr o risco de uma aba, usuário ou reconexão sobrescrever o estado de outra.
+Endurecer o endpoint que navega no disco local
+O /api/browse aceita um path, faz os.Stat, os.ReadDir, e no Windows ainda enumera todas as unidades. Isso é útil para escolher kubeconfig, mas é amplo demais para um serviço HTTP. Eu deixaria isso desabilitado por padrão, ou reduziria o escopo para um file picker mais controlado e somente em localhost.
+Tratar arquivos grandes de forma correta
+Hoje o upload usa ParseMultipartForm(100 << 20) e depois copia o conteúdo inteiro para um bytes.Buffer; no download, o código lê o stdout inteiro do cat e só depois cria um strings.NewReader. Isso funciona para validar a ideia, mas não é o ideal para uso real com arquivos grandes. Eu colocaria streaming de verdade, limite configurável de tamanho, cancelamento e barra de progresso.
+Fortalecer muito o helper pod
+O helper pod hoje usa nome fixo por PVC (kube-browser-helper-%s), imagem alpine:3.19, NodeName fixado, comando sleep 300 e cleanup em background “best effort”. Eu deixaria o nome único por operação, imagem configurável, resources/limits, securityContext, timeout explícito, retry/cleanup robusto e comportamento melhor para cluster com políticas mais restritas.
