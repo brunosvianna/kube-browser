@@ -1,3 +1,4 @@
 kube-browser
 *.exe
 vendor/
+.replit
