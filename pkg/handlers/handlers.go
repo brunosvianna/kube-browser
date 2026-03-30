@@ -36,13 +36,27 @@ type Handler struct {
         client    *k8s.Client
         static    embed.FS
         templates embed.FS
+        readOnly  bool
 }
 
 func New(static, templates embed.FS) *Handler {
+        ro := os.Getenv("KUBE_BROWSER_READ_ONLY") == "true" || os.Getenv("KUBE_BROWSER_READ_ONLY") == "1"
+        if ro {
+                log.Printf("Read-only mode enabled: upload endpoints will return 405")
+        }
         return &Handler{
                 static:    static,
                 templates: templates,
+                readOnly:  ro,
         }
+}
+
+func (h *Handler) checkReadOnly(w http.ResponseWriter) bool {
+        if h.readOnly {
+                h.jsonError(w, "read-only mode: write operations are disabled", http.StatusMethodNotAllowed)
+                return true
+        }
+        return false
 }
 
 func (h *Handler) getClient() *k8s.Client {
@@ -128,6 +142,7 @@ func (h *Handler) StatusHandler(w http.ResponseWriter, r *http.Request) {
         connected := client != nil
         resp := map[string]interface{}{
                 "connected": connected,
+                "readOnly":  h.readOnly,
         }
         if connected {
                 resp["kubeconfigPath"] = client.KubeconfigPath
@@ -379,6 +394,10 @@ const maxMetaFieldSize = 4096
 func (h *Handler) UploadFileHandler(w http.ResponseWriter, r *http.Request) {
         if r.Method != http.MethodPost {
                 h.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+                return
+        }
+
+        if h.checkReadOnly(w) {
                 return
         }
 

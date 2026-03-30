@@ -16,6 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.13] - 2026-03-30
+
+### Added
+- **Read-only mode** — set `KUBE_BROWSER_READ_ONLY=true` (or `=1`) to disable all
+  write operations server-side. The `UploadFileHandler` returns HTTP 405 with a JSON
+  error body when read-only mode is active; all other read endpoints are unaffected.
+- **UI read-only badge** — when read-only mode is active, a lock-icon "Read-only" badge
+  appears in the header and the upload button is permanently disabled (even after a PVC
+  is selected).
+- **Status API exposes `readOnly` flag** — `GET /api/status` now includes
+  `"readOnly": true/false` so clients and scripts can detect the mode programmatically.
+- **5 new unit tests** — cover upload blocked (405), upload not blocked when
+  `readOnly=false`, env-var parsing (`true`, `1`, `false`, empty, arbitrary value),
+  status response field presence, and status response field value when disabled.
+
+---
+
 ## [1.0.12] - 2026-03-30
 
 ### Security

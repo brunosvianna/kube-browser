@@ -49,6 +49,25 @@ header {
 .header-right {
     display: flex;
     align-items: center;
+    gap: 8px;
+}
+
+.read-only-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: rgba(210, 153, 34, 0.15);
+    border: 1px solid rgba(210, 153, 34, 0.4);
+    color: var(--warning);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.read-only-badge.hidden {
+    display: none;
 }
 
 .logo {

@@ -268,6 +268,24 @@ KUBE_BROWSER_EXTRA_LABELS="team=platform,cost-center=infra" \
 ./kube-browser
 ```
 
+### Read-only mode
+
+KubeBrowser can be started in **read-only mode**, which disables all write operations (file uploads) at the server level. This is useful when you want to give colleagues or CI pipelines read access to PVCs without the risk of accidental data modification.
+
+```bash
+KUBE_BROWSER_READ_ONLY=true ./kube-browser
+```
+
+| Variable                  | Values         | Default  | Effect                                                           |
+|---------------------------|----------------|----------|------------------------------------------------------------------|
+| `KUBE_BROWSER_READ_ONLY`  | `true` / `1`   | _(unset)_| Rejects upload requests with HTTP 405 and disables the UI upload button. |
+
+When read-only mode is active:
+- The upload endpoint (`POST /api/upload`) returns **HTTP 405** with `{"error": "read-only mode: write operations are disabled"}`.
+- A **"Read-only" badge** appears in the browser header with a lock icon.
+- The **upload button** is permanently disabled regardless of which PVC is selected.
+- `GET /api/status` includes `"readOnly": true` so scripts can detect the mode.
+
 ### Graceful shutdown
 
 KubeBrowser handles `SIGINT` and `SIGTERM` gracefully: it stops accepting new connections and waits up to `SHUTDOWN_TIMEOUT` seconds for active requests to finish before exiting.

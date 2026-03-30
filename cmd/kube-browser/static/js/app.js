@@ -1,5 +1,6 @@
 const state = {
     connected: false,
+    readOnly: false,
     namespace: '',
     pvc: '',
     currentPath: '/',
@@ -30,6 +31,30 @@ async function api(url, options = {}) {
         showToast(err.message, 'error');
         throw err;
     }
+}
+
+function applyReadOnlyMode(readOnly) {
+    state.readOnly = readOnly;
+    const badge = $('#read-only-badge');
+    const uploadBtn = $('#upload-btn');
+    if (readOnly) {
+        badge.classList.remove('hidden');
+        uploadBtn.disabled = true;
+        uploadBtn.title = 'Upload is disabled in read-only mode';
+    } else {
+        badge.classList.add('hidden');
+        uploadBtn.removeAttribute('title');
+    }
+}
+
+async function fetchStatus() {
+    try {
+        const res = await fetch('/api/status');
+        if (res.ok) {
+            const data = await res.json();
+            applyReadOnlyMode(!!data.readOnly);
+        }
+    } catch (_) {}
 }
 
 function setConnected(connected) {
@@ -246,7 +271,9 @@ function selectPVC(pvcName) {
         item.classList.toggle('active', item.dataset.name === pvcName);
     });
 
-    $('#upload-btn').disabled = false;
+    if (!state.readOnly) {
+        $('#upload-btn').disabled = false;
+    }
     $('#refresh-btn').disabled = false;
 
     loadFiles();
@@ -579,6 +606,8 @@ function closeFileBrowser() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    fetchStatus();
+
     $('#load-kubeconfig-btn').addEventListener('click', loadKubeconfig);
     $('#browse-kubeconfig-btn').addEventListener('click', openFileBrowser);
 
