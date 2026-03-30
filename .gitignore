@@ -2,3 +2,4 @@ kube-browser
 *.exe
 vendor/
 .replit
+replit.md
