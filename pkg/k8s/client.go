@@ -409,9 +409,17 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
 
         _, err := c.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
         if err != nil {
+                if apierrors.IsForbidden(err) {
+                        return "", &K8sError{
+                                Kind:    ErrKindRBAC,
+                                Message: "Permission denied: your kubeconfig cannot create pods. Add 'pods' create RBAC permission.",
+                                Cause:   err,
+                        }
+                }
                 return "", fmt.Errorf("failed to create helper pod: %w", err)
         }
 
+        var lastPhase, lastReason string
         deadline := time.Now().Add(startupTimeout)
         for time.Now().Before(deadline) {
                 time.Sleep(2 * time.Second)
@@ -419,6 +427,10 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
                 if err != nil {
                         log.Printf("Error polling helper pod %s: %v", helperName, err)
                         continue
+                }
+                lastPhase = string(p.Status.Phase)
+                if len(p.Status.ContainerStatuses) > 0 && p.Status.ContainerStatuses[0].State.Waiting != nil {
+                        lastReason = p.Status.ContainerStatuses[0].State.Waiting.Reason
                 }
                 if p.Status.Phase == corev1.PodRunning {
                         log.Printf("Helper pod %s is running", helperName)
@@ -428,11 +440,11 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
                         go c.deleteHelperPod(context.Background(), namespace, helperName)
                         return "", fmt.Errorf("helper pod %s entered terminal phase: %s", helperName, p.Status.Phase)
                 }
-                log.Printf("Waiting for helper pod %s (phase: %s)", helperName, p.Status.Phase)
+                log.Printf("Waiting for helper pod %s (phase: %s, reason: %s)", helperName, lastPhase, lastReason)
         }
 
         go c.deleteHelperPod(context.Background(), namespace, helperName)
-        return "", fmt.Errorf("helper pod %s did not start within %s", helperName, startupTimeout)
+        return "", classifyPodError(lastPhase, lastReason)
 }
 
 func (c *Client) deleteHelperPod(ctx context.Context, namespace, podName string) {
@@ -511,7 +523,7 @@ func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, contain
                 if stderr != "" {
                         log.Printf("  stderr: %s", strings.TrimSpace(stderr))
                 }
-                return nil, err
+                return nil, classifyExecError(err, stderr)
         }
 
         var files []FileInfo
@@ -559,7 +571,7 @@ func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, conta
                 if stderr != "" {
                         log.Printf("  stderr: %s", strings.TrimSpace(stderr))
                 }
-                return nil, err
+                return nil, classifyExecError(err, stderr)
         }
 
         var files []FileInfo
@@ -622,7 +634,7 @@ func (c *Client) listFilesFind(ctx context.Context, namespace, podName, containe
                 if stderr != "" {
                         log.Printf("  stderr: %s", strings.TrimSpace(stderr))
                 }
-                return nil, err
+                return nil, classifyExecError(err, stderr)
         }
 
         var files []FileInfo

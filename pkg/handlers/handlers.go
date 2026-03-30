@@ -83,6 +83,20 @@ func (h *Handler) jsonError(w http.ResponseWriter, message string, code int) {
         json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
+func (h *Handler) jsonErrorFromErr(w http.ResponseWriter, err error, code int) {
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(code)
+        var k8sErr *k8s.K8sError
+        if errors.As(err, &k8sErr) {
+                json.NewEncoder(w).Encode(map[string]string{
+                        "error": k8sErr.Message,
+                        "kind":  string(k8sErr.Kind),
+                })
+                return
+        }
+        json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
 func (h *Handler) IndexHandler(w http.ResponseWriter, r *http.Request) {
         if r.URL.Path != "/" {
                 http.NotFound(w, r)
@@ -271,7 +285,7 @@ func (h *Handler) ListFilesHandler(w http.ResponseWriter, r *http.Request) {
 
         files, err := client.ListFiles(r.Context(), namespace, pvc, path)
         if err != nil {
-                h.jsonError(w, fmt.Sprintf("Failed to list files: %v", err), http.StatusInternalServerError)
+                h.jsonErrorFromErr(w, err, http.StatusInternalServerError)
                 return
         }
 
@@ -301,7 +315,7 @@ func (h *Handler) DownloadFileHandler(w http.ResponseWriter, r *http.Request) {
 
         reader, fileName, err := client.DownloadFile(r.Context(), namespace, pvc, filePath)
         if err != nil {
-                h.jsonError(w, fmt.Sprintf("Failed to download file: %v", err), http.StatusInternalServerError)
+                h.jsonErrorFromErr(w, err, http.StatusInternalServerError)
                 return
         }
 
@@ -438,7 +452,7 @@ func (h *Handler) UploadFileHandler(w http.ResponseWriter, r *http.Request) {
                 return
         }
         if err != nil {
-                h.jsonError(w, fmt.Sprintf("Failed to upload file: %v", err), http.StatusInternalServerError)
+                h.jsonErrorFromErr(w, err, http.StatusInternalServerError)
                 return
         }
 
