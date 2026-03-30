@@ -416,7 +416,7 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
                                 Cause:   err,
                         }
                 }
-                return "", fmt.Errorf("failed to create helper pod: %w", err)
+                return "", classifyApiError(err)
         }
 
         var lastPhase, lastReason string
