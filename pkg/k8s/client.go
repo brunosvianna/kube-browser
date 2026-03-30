@@ -10,11 +10,14 @@ import (
         gopath "path"
         "path/filepath"
         "runtime"
+        "strconv"
         "strings"
         "time"
 
         corev1 "k8s.io/api/core/v1"
+        "k8s.io/apimachinery/pkg/api/resource"
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+        apierrors "k8s.io/apimachinery/pkg/api/errors"
         "k8s.io/client-go/kubernetes"
         "k8s.io/client-go/kubernetes/scheme"
         "k8s.io/client-go/rest"
@@ -295,28 +298,74 @@ func (c *Client) execInPod(ctx context.Context, namespace, podName, containerNam
         return stdout.String(), stderr.String(), err
 }
 
-func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volumeName, nodeName string) (string, error) {
-        helperName := fmt.Sprintf("kube-browser-helper-%s", pvcName)
+func getEnvWithDefault(key, defaultVal string) string {
+        if v := os.Getenv(key); v != "" {
+                return v
+        }
+        return defaultVal
+}
 
-        existing, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, helperName, metav1.GetOptions{})
-        if err == nil {
-                if existing.Status.Phase == corev1.PodRunning && existing.DeletionTimestamp == nil {
-                        log.Printf("Reusing existing helper pod %s", helperName)
-                        return helperName, nil
-                }
-                log.Printf("Deleting stale helper pod %s (phase: %s)", helperName, existing.Status.Phase)
-                _ = c.clientset.CoreV1().Pods(namespace).Delete(ctx, helperName, metav1.DeleteOptions{})
-                for i := 0; i < 30; i++ {
-                        time.Sleep(2 * time.Second)
-                        _, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, helperName, metav1.GetOptions{})
-                        if err != nil {
-                                break
-                        }
-                        log.Printf("Waiting for stale helper pod %s to be deleted...", helperName)
+func parseQuantityWithDefault(envKey, defaultVal string) resource.Quantity {
+        val := getEnvWithDefault(envKey, defaultVal)
+        q, err := resource.ParseQuantity(val)
+        if err != nil {
+                log.Printf("Warning: invalid quantity %q for %s (using default %s): %v", val, envKey, defaultVal, err)
+                return resource.MustParse(defaultVal)
+        }
+        return q
+}
+
+func helperResourceRequirements() corev1.ResourceRequirements {
+        return corev1.ResourceRequirements{
+                Requests: corev1.ResourceList{
+                        corev1.ResourceCPU:    parseQuantityWithDefault("HELPER_CPU_REQUEST", "10m"),
+                        corev1.ResourceMemory: parseQuantityWithDefault("HELPER_MEM_REQUEST", "16Mi"),
+                },
+                Limits: corev1.ResourceList{
+                        corev1.ResourceCPU:    parseQuantityWithDefault("HELPER_CPU_LIMIT", "100m"),
+                        corev1.ResourceMemory: parseQuantityWithDefault("HELPER_MEM_LIMIT", "64Mi"),
+                },
+        }
+}
+
+func helperSecurityContext() *corev1.SecurityContext {
+        readOnly := true
+        allowPrivEsc := false
+        runAsNonRoot := true
+
+        if v := os.Getenv("HELPER_RUN_AS_ROOT"); v == "true" || v == "1" {
+                runAsNonRoot = false
+        }
+
+        sc := &corev1.SecurityContext{
+                ReadOnlyRootFilesystem:   &readOnly,
+                AllowPrivilegeEscalation: &allowPrivEsc,
+                RunAsNonRoot:             &runAsNonRoot,
+        }
+
+        if uid := os.Getenv("HELPER_RUN_AS_USER"); uid != "" {
+                if parsed, err := strconv.ParseInt(uid, 10, 64); err == nil {
+                        sc.RunAsUser = &parsed
                 }
         }
 
-        log.Printf("Creating helper pod %s on node %s for PVC %s", helperName, nodeName, pvcName)
+        return sc
+}
+
+func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volumeName, nodeName string) (string, error) {
+        ts := strconv.FormatInt(time.Now().UnixNano(), 16)
+        helperName := fmt.Sprintf("kube-browser-helper-%s-%s", pvcName, ts)
+
+        image := getEnvWithDefault("HELPER_IMAGE", "alpine:3.19")
+
+        startupTimeout := 60 * time.Second
+        if v := os.Getenv("HELPER_STARTUP_TIMEOUT_SEC"); v != "" {
+                if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+                        startupTimeout = time.Duration(parsed) * time.Second
+                }
+        }
+
+        log.Printf("Creating helper pod %s on node %s for PVC %s (image: %s)", helperName, nodeName, pvcName, image)
 
         pod := &corev1.Pod{
                 ObjectMeta: metav1.ObjectMeta{
@@ -331,9 +380,11 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
                         NodeName: nodeName,
                         Containers: []corev1.Container{
                                 {
-                                        Name:    "helper",
-                                        Image:   "alpine:3.19",
-                                        Command: []string{"sleep", "300"},
+                                        Name:      "helper",
+                                        Image:     image,
+                                        Command:   []string{"sleep", "300"},
+                                        Resources: helperResourceRequirements(),
+                                        SecurityContext: helperSecurityContext(),
                                         VolumeMounts: []corev1.VolumeMount{
                                                 {
                                                         Name:      "pvc-data",
@@ -356,35 +407,99 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
                 },
         }
 
-        _, err = c.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
+        _, err := c.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
         if err != nil {
                 return "", fmt.Errorf("failed to create helper pod: %w", err)
         }
 
-        for i := 0; i < 30; i++ {
+        deadline := time.Now().Add(startupTimeout)
+        for time.Now().Before(deadline) {
                 time.Sleep(2 * time.Second)
                 p, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, helperName, metav1.GetOptions{})
                 if err != nil {
+                        log.Printf("Error polling helper pod %s: %v", helperName, err)
                         continue
                 }
                 if p.Status.Phase == corev1.PodRunning {
                         log.Printf("Helper pod %s is running", helperName)
                         return helperName, nil
                 }
+                if p.Status.Phase == corev1.PodFailed || p.Status.Phase == corev1.PodSucceeded {
+                        go c.deleteHelperPod(context.Background(), namespace, helperName)
+                        return "", fmt.Errorf("helper pod %s entered terminal phase: %s", helperName, p.Status.Phase)
+                }
                 log.Printf("Waiting for helper pod %s (phase: %s)", helperName, p.Status.Phase)
         }
 
-        _ = c.clientset.CoreV1().Pods(namespace).Delete(ctx, helperName, metav1.DeleteOptions{})
-        return "", fmt.Errorf("helper pod did not start in time")
+        go c.deleteHelperPod(context.Background(), namespace, helperName)
+        return "", fmt.Errorf("helper pod %s did not start within %s", helperName, startupTimeout)
 }
 
 func (c *Client) deleteHelperPod(ctx context.Context, namespace, podName string) {
-        err := c.clientset.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
-        if err != nil {
-                log.Printf("Warning: failed to delete helper pod %s: %v", podName, err)
-        } else {
-                log.Printf("Deleted helper pod %s", podName)
+        deleteTimeout := 60 * time.Second
+        if v := os.Getenv("HELPER_DELETE_TIMEOUT_SEC"); v != "" {
+                if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+                        deleteTimeout = time.Duration(parsed) * time.Second
+                }
         }
+
+        const maxRetries = 3
+        var lastErr error
+        for attempt := 1; attempt <= maxRetries; attempt++ {
+                err := c.clientset.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+                if err != nil {
+                        if apierrors.IsNotFound(err) {
+                                log.Printf("Helper pod %s already deleted", podName)
+                                return
+                        }
+                        log.Printf("Attempt %d: failed to delete helper pod %s: %v", attempt, podName, err)
+                        lastErr = err
+                        time.Sleep(time.Duration(attempt) * time.Second)
+                        continue
+                }
+                lastErr = nil
+                break
+        }
+        if lastErr != nil {
+                log.Printf("Warning: could not issue delete for helper pod %s after %d attempts: %v", podName, maxRetries, lastErr)
+                return
+        }
+
+        deadline := time.Now().Add(deleteTimeout)
+        for time.Now().Before(deadline) {
+                time.Sleep(2 * time.Second)
+                _, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+                if err != nil {
+                        if apierrors.IsNotFound(err) {
+                                log.Printf("Helper pod %s confirmed deleted", podName)
+                                return
+                        }
+                        log.Printf("Transient error polling helper pod %s deletion: %v", podName, err)
+                        continue
+                }
+                log.Printf("Waiting for helper pod %s to be fully deleted...", podName)
+        }
+        log.Printf("Warning: helper pod %s was not confirmed deleted within %s", podName, deleteTimeout)
+}
+
+func (c *Client) CleanupOrphanedHelperPods(ctx context.Context) {
+        log.Printf("Scanning for orphaned helper pods with label managed-by=kube-browser...")
+        podList, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+                LabelSelector: "managed-by=kube-browser",
+        })
+        if err != nil {
+                log.Printf("Warning: failed to list orphaned helper pods: %v", err)
+                return
+        }
+        if len(podList.Items) == 0 {
+                log.Printf("No orphaned helper pods found")
+                return
+        }
+        for _, pod := range podList.Items {
+                log.Printf("Deleting orphaned helper pod %s/%s (phase: %s)", pod.Namespace, pod.Name, pod.Status.Phase)
+                c.deleteHelperPod(ctx, pod.Namespace, pod.Name)
+        }
+        log.Printf("Orphaned helper pod cleanup complete (%d pods processed)", len(podList.Items))
 }
 
 func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {

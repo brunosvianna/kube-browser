@@ -1,6 +1,7 @@
 package handlers
 
 import (
+        "context"
         "embed"
         "encoding/json"
         "fmt"
@@ -15,6 +16,7 @@ import (
         "strings"
         "sync"
         "text/template"
+        "time"
 
         "kube-browser/pkg/k8s"
 )
@@ -176,6 +178,10 @@ func (h *Handler) ConnectHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         h.setClient(client)
+
+        cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+        defer cleanupCancel()
+        client.CleanupOrphanedHelperPods(cleanupCtx)
 
         h.jsonResponse(w, map[string]interface{}{
                 "connected":  true,
