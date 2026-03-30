@@ -231,6 +231,43 @@ READ_TIMEOUT=30 WRITE_TIMEOUT=120 ./kube-browser
 | `HELPER_RUN_AS_ROOT`      | `false`      | Set to `true` to run the helper as root (UID 0)      |
 | `HELPER_RUN_AS_USER`      | _(unset)_    | Specific UID to run the helper container as          |
 
+### Helper Pod — cluster-specific configuration
+
+These variables let you adapt the helper pod to clusters with stricter admission policies, private registries, or dedicated node pools.
+
+| Variable                          | Default   | Description                                                                                      |
+|-----------------------------------|-----------|--------------------------------------------------------------------------------------------------|
+| `KUBE_BROWSER_IMAGE_PULL_SECRET`  | _(unset)_ | Name of an `imagePullSecret` in the target namespace, used when the helper image is in a private registry. |
+| `KUBE_BROWSER_SERVICE_ACCOUNT`    | _(unset)_ | `serviceAccountName` for the helper pod. Useful when your cluster's RBAC or OPA requires a specific account. |
+| `KUBE_BROWSER_NODE_SELECTOR`      | _(unset)_ | Pin the helper pod to specific nodes. Accepts `key=value,key=value` or a JSON object `{"key":"value"}`. |
+| `KUBE_BROWSER_TOLERATIONS`        | _(unset)_ | JSON array of Kubernetes [Toleration](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/) objects, allowing the helper pod to run on tainted nodes. |
+| `KUBE_BROWSER_EXTRA_LABELS`       | _(unset)_ | Additional labels to attach to the helper pod. Format: `key=value,key=value`. Merged with the built-in `app` and `managed-by` labels. |
+| `KUBE_BROWSER_EXTRA_ANNOTATIONS`  | _(unset)_ | Annotations to attach to the helper pod. Format: `key=value,key=value`. Useful for Vault injection, Datadog APM, etc. |
+
+#### Example: restricted cluster (private registry + GPU taint)
+
+```bash
+# Pull helper image from internal mirror
+HELPER_IMAGE=registry.internal.example.com/alpine:3.19 \
+
+# Authenticate to the private registry
+KUBE_BROWSER_IMAGE_PULL_SECRET=registry-credentials \
+
+# Run with a dedicated service account
+KUBE_BROWSER_SERVICE_ACCOUNT=kube-browser-helper \
+
+# Schedule only on CPU-optimised nodes
+KUBE_BROWSER_NODE_SELECTOR="node-pool=cpu-optimised,disk=ssd" \
+
+# Tolerate a GPU-reserved taint so the helper can co-locate with GPU workloads
+KUBE_BROWSER_TOLERATIONS='[{"key":"nvidia.com/gpu","operator":"Exists","effect":"NoSchedule"}]' \
+
+# Add custom labels required by your OPA policies
+KUBE_BROWSER_EXTRA_LABELS="team=platform,cost-center=infra" \
+
+./kube-browser
+```
+
 ### Graceful shutdown
 
 KubeBrowser handles `SIGINT` and `SIGTERM` gracefully: it stops accepting new connections and waits up to `SHUTDOWN_TIMEOUT` seconds for active requests to finish before exiting.
@@ -474,7 +511,7 @@ The following features are planned for future releases:
 | **File deletion** | Delete individual files or entire directories from a PVC. |
 | **Rename / move** | Rename files and move them between directories within the same PVC. |
 | **Integration tests** | End-to-end tests against a real cluster using `kind`, exercising the full exec and helper pod paths. |
-| **Private registry support** | UI option to configure `imagePullSecrets` for the helper pod, removing the manual `HELPER_IMAGE` workaround for air-gapped clusters. |
+| **Private registry support** | Configure `KUBE_BROWSER_IMAGE_PULL_SECRET` to pull from private registries. See [Helper Pod configuration](#helper-pod--cluster-specific-configuration). |
 | **Multi-file download** | Select and download multiple files as a single `.zip` archive. |
 | **Directory upload** | Upload entire directory trees (expanded from the current single-file upload). |
 

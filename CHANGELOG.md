@@ -16,6 +16,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.12] - 2026-03-30
+
+### Security
+- **Shell injection fix** — `listFilesFind` no longer passes the container path via
+  `sh -c "find '<path>' ..."`. The `find` command and all its arguments are now passed
+  as a Go `[]string` slice directly to the Kubernetes exec API, eliminating any risk
+  of shell metacharacter injection from paths that contain single quotes or other
+  special characters.
+
+### Added
+- **Helper pod: `imagePullSecrets`** — set `KUBE_BROWSER_IMAGE_PULL_SECRET` to the
+  name of an existing secret in the target namespace to authenticate against private
+  container registries.
+- **Helper pod: `serviceAccountName`** — set `KUBE_BROWSER_SERVICE_ACCOUNT` to run
+  the helper pod under a specific Kubernetes service account (useful when OPA/Gatekeeper
+  requires it).
+- **Helper pod: `nodeSelector`** — set `KUBE_BROWSER_NODE_SELECTOR` to constrain helper
+  pods to specific node pools (accepts `key=value,key=value` or a JSON object).
+- **Helper pod: `tolerations`** — set `KUBE_BROWSER_TOLERATIONS` to a JSON array of
+  Kubernetes Toleration objects so the helper pod can co-locate with tainted nodes
+  (e.g. GPU, spot, or dedicated nodes).
+- **Helper pod: extra labels** — set `KUBE_BROWSER_EXTRA_LABELS` (`key=value,…`) to
+  attach additional labels, satisfying OPA label-requirement policies.
+- **Helper pod: extra annotations** — set `KUBE_BROWSER_EXTRA_ANNOTATIONS`
+  (`key=value,…`) to add annotations for tools such as Vault injector or Datadog APM.
+- **`find` + BusyBox fallback without shell** — when `find -exec stat` fails because
+  `stat` is unavailable (BusyBox `find` does not support `-exec stat -c …`), the binary
+  now retries with a plain `find -print` call. Both calls are shell-free Go exec slices.
+- Unit tests for `parseKeyValuePairs` (11 cases) and `parseTolerations` (7 cases)
+  covering key=value pairs, JSON input, invalid input, and multiple tolerations.
+- README: new section "Helper Pod — cluster-specific configuration" with a full variable
+  table and a worked example for a restricted cluster (private registry + GPU taint).
+
+---
+
 ## [1.0.11] - 2026-03-30
 
 ### Added

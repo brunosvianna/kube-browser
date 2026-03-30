@@ -3,6 +3,7 @@ package k8s
 import (
         "bytes"
         "context"
+        "encoding/json"
         "fmt"
         "io"
         "log"
@@ -360,6 +361,53 @@ func helperSecurityContext() *corev1.SecurityContext {
         return sc
 }
 
+// parseKeyValuePairs parses a "key=value,key=value" string into a map.
+// It also accepts JSON objects ({"key":"value"}).
+func parseKeyValuePairs(s string) map[string]string {
+        s = strings.TrimSpace(s)
+        if s == "" {
+                return nil
+        }
+        result := make(map[string]string)
+        if strings.HasPrefix(s, "{") {
+                if err := json.Unmarshal([]byte(s), &result); err != nil {
+                        log.Printf("Warning: failed to parse JSON key-value pairs %q: %v", s, err)
+                        return nil
+                }
+                return result
+        }
+        for _, pair := range strings.Split(s, ",") {
+                pair = strings.TrimSpace(pair)
+                if pair == "" {
+                        continue
+                }
+                parts := strings.SplitN(pair, "=", 2)
+                if len(parts) != 2 {
+                        log.Printf("Warning: invalid key=value pair %q, skipping", pair)
+                        continue
+                }
+                result[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+        }
+        if len(result) == 0 {
+                return nil
+        }
+        return result
+}
+
+// parseTolerations parses a JSON array of Kubernetes Toleration objects.
+func parseTolerations(s string) []corev1.Toleration {
+        s = strings.TrimSpace(s)
+        if s == "" {
+                return nil
+        }
+        var tolerations []corev1.Toleration
+        if err := json.Unmarshal([]byte(s), &tolerations); err != nil {
+                log.Printf("Warning: failed to parse KUBE_BROWSER_TOLERATIONS %q: %v", s, err)
+                return nil
+        }
+        return tolerations
+}
+
 func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volumeName, nodeName string) (string, error) {
         ts := strconv.FormatInt(time.Now().UnixNano(), 16)
         helperName := fmt.Sprintf("kube-browser-helper-%s-%s", pvcName, ts)
@@ -373,46 +421,72 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
                 }
         }
 
+        labels := map[string]string{
+                "app":        "kube-browser-helper",
+                "managed-by": "kube-browser",
+        }
+        for k, v := range parseKeyValuePairs(os.Getenv("KUBE_BROWSER_EXTRA_LABELS")) {
+                labels[k] = v
+        }
+
+        annotations := parseKeyValuePairs(os.Getenv("KUBE_BROWSER_EXTRA_ANNOTATIONS"))
+
         log.Printf("Creating helper pod %s on node %s for PVC %s (image: %s)", helperName, nodeName, pvcName, image)
+
+        podSpec := corev1.PodSpec{
+                NodeName: nodeName,
+                Containers: []corev1.Container{
+                        {
+                                Name:            "helper",
+                                Image:           image,
+                                Command:         []string{"sleep", "300"},
+                                Resources:       helperResourceRequirements(),
+                                SecurityContext: helperSecurityContext(),
+                                VolumeMounts: []corev1.VolumeMount{
+                                        {
+                                                Name:      "pvc-data",
+                                                MountPath: "/data",
+                                        },
+                                },
+                        },
+                },
+                Volumes: []corev1.Volume{
+                        {
+                                Name: "pvc-data",
+                                VolumeSource: corev1.VolumeSource{
+                                        PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+                                                ClaimName: pvcName,
+                                        },
+                                },
+                        },
+                },
+                RestartPolicy: corev1.RestartPolicyNever,
+        }
+
+        if sa := os.Getenv("KUBE_BROWSER_SERVICE_ACCOUNT"); sa != "" {
+                podSpec.ServiceAccountName = sa
+        }
+
+        if ips := os.Getenv("KUBE_BROWSER_IMAGE_PULL_SECRET"); ips != "" {
+                podSpec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: ips}}
+        }
+
+        if ns := parseKeyValuePairs(os.Getenv("KUBE_BROWSER_NODE_SELECTOR")); ns != nil {
+                podSpec.NodeSelector = ns
+        }
+
+        if tols := parseTolerations(os.Getenv("KUBE_BROWSER_TOLERATIONS")); tols != nil {
+                podSpec.Tolerations = tols
+        }
 
         pod := &corev1.Pod{
                 ObjectMeta: metav1.ObjectMeta{
-                        Name:      helperName,
-                        Namespace: namespace,
-                        Labels: map[string]string{
-                                "app":        "kube-browser-helper",
-                                "managed-by": "kube-browser",
-                        },
+                        Name:        helperName,
+                        Namespace:   namespace,
+                        Labels:      labels,
+                        Annotations: annotations,
                 },
-                Spec: corev1.PodSpec{
-                        NodeName: nodeName,
-                        Containers: []corev1.Container{
-                                {
-                                        Name:      "helper",
-                                        Image:     image,
-                                        Command:   []string{"sleep", "300"},
-                                        Resources: helperResourceRequirements(),
-                                        SecurityContext: helperSecurityContext(),
-                                        VolumeMounts: []corev1.VolumeMount{
-                                                {
-                                                        Name:      "pvc-data",
-                                                        MountPath: "/data",
-                                                },
-                                        },
-                                },
-                        },
-                        Volumes: []corev1.Volume{
-                                {
-                                        Name: "pvc-data",
-                                        VolumeSource: corev1.VolumeSource{
-                                                PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-                                                        ClaimName: pvcName,
-                                                },
-                                        },
-                                },
-                        },
-                        RestartPolicy: corev1.RestartPolicyNever,
-                },
+                Spec: podSpec,
         }
 
         _, err := c.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
@@ -552,14 +626,30 @@ func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, conta
 
 func (c *Client) listFilesFind(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
+
         stdout, stderr, err := c.getExecutor().execInPod(ctx, namespace, podName, containerName, []string{
-                "sh", "-c", fmt.Sprintf("find '%s' -maxdepth 1 -mindepth 1 -exec stat -c '%%n|%%s|%%Y|%%F' {} \\; 2>/dev/null || find '%s' -maxdepth 1 -mindepth 1 -print", fullPath, fullPath),
+                "find", fullPath, "-maxdepth", "1", "-mindepth", "1",
+                "-exec", "stat", "-c", "%n|%s|%Y|%F", "{}", ";",
         })
         if err != nil {
                 if stderr != "" {
                         log.Printf("  stderr: %s", strings.TrimSpace(stderr))
                 }
-                return nil, classifyExecError(err, stderr)
+                classifiedErr := classifyExecError(err, stderr)
+                if classifiedErr.Kind != ErrKindNoShell {
+                        return nil, classifiedErr
+                }
+                log.Printf("  stat unavailable, retrying with find -print only")
+                stdout2, stderr2, err2 := c.getExecutor().execInPod(ctx, namespace, podName, containerName, []string{
+                        "find", fullPath, "-maxdepth", "1", "-mindepth", "1", "-print",
+                })
+                if err2 != nil {
+                        if stderr2 != "" {
+                                log.Printf("  stderr (find fallback): %s", strings.TrimSpace(stderr2))
+                        }
+                        return nil, classifyExecError(err2, stderr2)
+                }
+                return parseFindOutput(stdout2, fullPath, path), nil
         }
         return parseFindOutput(stdout, fullPath, path), nil
 }
