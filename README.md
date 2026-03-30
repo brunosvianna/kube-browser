@@ -129,6 +129,14 @@ This happens transparently — no manual intervention needed.
 
 ## Configuration
 
+### Bind address
+
+By default, KubeBrowser binds to `127.0.0.1` (loopback only), so it is not reachable from other hosts on the network. Override with the `HOST` environment variable:
+
+```bash
+HOST=0.0.0.0 ./kube-browser   # listen on all interfaces (use with care)
+```
+
 ### Port
 
 By default, KubeBrowser listens on port `5000`. Override it with the `PORT` environment variable:
@@ -136,6 +144,31 @@ By default, KubeBrowser listens on port `5000`. Override it with the `PORT` envi
 ```bash
 PORT=8080 ./kube-browser
 ```
+
+### Timeouts
+
+All timeout values are specified in **seconds** and can be overridden via environment variables:
+
+| Variable           | Default | Description                                          |
+|--------------------|---------|------------------------------------------------------|
+| `READ_TIMEOUT`     | `15`    | Maximum time to read the full request (headers + body) |
+| `WRITE_TIMEOUT`    | `60`    | Maximum time to write the response                   |
+| `IDLE_TIMEOUT`     | `120`   | Maximum time to keep an idle keep-alive connection   |
+| `SHUTDOWN_TIMEOUT` | `10`    | Grace period to drain active connections on shutdown |
+
+Example:
+
+```bash
+READ_TIMEOUT=30 WRITE_TIMEOUT=120 ./kube-browser
+```
+
+### Graceful shutdown
+
+KubeBrowser handles `SIGINT` and `SIGTERM` gracefully: it stops accepting new connections and waits up to `SHUTDOWN_TIMEOUT` seconds for active requests to finish before exiting.
+
+### `/api/browse` restriction
+
+The `/api/browse` endpoint (used to navigate your local filesystem when selecting a kubeconfig) only accepts requests originating from `127.0.0.1` or `::1`. Any request from a different IP address receives a `403 Forbidden` response.
 
 ### Kubeconfig
 
@@ -217,7 +250,10 @@ kube-browser/
 
 ## Security
 
-- KubeBrowser runs **locally** on your machine — it does not expose your cluster to the internet.
+- KubeBrowser binds to `127.0.0.1` by default — it is not reachable from other hosts on your network.
+- The `/api/browse` endpoint (local filesystem navigation) is restricted to loopback addresses (`127.0.0.1` / `::1`).
+- The HTTP server enforces configurable read, write, and idle timeouts to protect against slow-client attacks.
+- Graceful shutdown drains active connections cleanly on `SIGINT`/`SIGTERM`.
 - Path traversal protection is enforced on all file operations.
 - The binary only communicates with the Kubernetes API using your existing kubeconfig credentials.
 
