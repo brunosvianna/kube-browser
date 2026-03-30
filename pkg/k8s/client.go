@@ -438,7 +438,7 @@ func (c *Client) createHelperPod(ctx context.Context, namespace, pvcName, volume
                 }
                 if p.Status.Phase == corev1.PodFailed || p.Status.Phase == corev1.PodSucceeded {
                         go c.deleteHelperPod(context.Background(), namespace, helperName)
-                        return "", fmt.Errorf("helper pod %s entered terminal phase: %s", helperName, p.Status.Phase)
+                        return "", classifyPodError(string(p.Status.Phase), lastReason)
                 }
                 log.Printf("Waiting for helper pod %s (phase: %s, reason: %s)", helperName, lastPhase, lastReason)
         }
@@ -715,7 +715,7 @@ func (c *Client) tryListFiles(ctx context.Context, namespace, podName, container
         }
         log.Printf("find+stat failed: %v", err)
 
-        return nil, fmt.Errorf("all listing methods failed on container %s", containerName)
+        return nil, err
 }
 
 func (c *Client) ListFiles(ctx context.Context, namespace, pvcName, path string) ([]FileInfo, error) {
@@ -734,7 +734,8 @@ func (c *Client) ListFiles(ctx context.Context, namespace, pvcName, path string)
         log.Printf("Direct exec failed, creating helper pod for PVC %s on node %s", pvcName, info.nodeName)
         helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName, info.nodeName)
         if helperErr != nil {
-                return nil, fmt.Errorf("direct exec failed (%v) and helper pod creation failed (%v)", err, helperErr)
+                log.Printf("Direct exec error was: %v", err)
+                return nil, helperErr
         }
 
         files, helperErr = c.tryListFiles(ctx, namespace, helperName, "helper", "/data", path)
@@ -742,7 +743,7 @@ func (c *Client) ListFiles(ctx context.Context, namespace, pvcName, path string)
         go c.deleteHelperPod(context.Background(), namespace, helperName)
 
         if helperErr != nil {
-                return nil, fmt.Errorf("failed to list files even with helper pod: %v", helperErr)
+                return nil, fmt.Errorf("failed to list files even with helper pod: %w", helperErr)
         }
 
         return files, nil
