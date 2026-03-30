@@ -99,7 +99,7 @@ Click on any file to download it directly to your machine.
 
 ## How It Works
 
-KubeBrowser runs entirely on your machine and communicates with the cluster through the Kubernetes API using your existing kubeconfig credentials. No server-side components are installed in the cluster.
+KubeBrowser runs entirely on your machine and communicates with the cluster through the Kubernetes API using your existing kubeconfig credentials. No permanent in-cluster components are installed — the helper pod is a temporary fallback that is deleted immediately after use.
 
 ### Normal mode (direct exec)
 
@@ -273,11 +273,12 @@ For **helper pod mode** (required when the app container has no shell):
 ```yaml
 - apiGroups: [""]
   resources: ["pods"]
-  verbs: ["get", "list", "watch", "create", "delete"]
+  verbs: ["get", "list", "create", "delete"]
 ```
 
-> `watch` is needed so KubeBrowser can poll the helper pod until it reaches `Running` state.  
-> `create` and `delete` on `pods` are **only** needed if your workloads use minimal/distroless images.
+> KubeBrowser polls the helper pod status with repeated `get` calls until it reaches `Running` state.  
+> `create` and `delete` on `pods` are **only** needed if your workloads use minimal/distroless images.  
+> Adding `watch` is harmless and may be required by some admission policies, but it is not used by the current implementation.
 
 A complete example ClusterRole:
 
@@ -295,7 +296,7 @@ rules:
   verbs: ["get", "list"]
 - apiGroups: [""]
   resources: ["pods"]
-  verbs: ["get", "list", "watch", "create", "delete"]
+  verbs: ["get", "list", "create", "delete"]
 - apiGroups: [""]
   resources: ["pods/exec"]
   verbs: ["create"]
