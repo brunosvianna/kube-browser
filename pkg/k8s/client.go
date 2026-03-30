@@ -636,10 +636,11 @@ func (c *Client) listFilesFind(ctx context.Context, namespace, podName, containe
                         log.Printf("  stderr: %s", strings.TrimSpace(stderr))
                 }
                 classifiedErr := classifyExecError(err, stderr)
-                if classifiedErr.Kind != ErrKindNoShell {
+                switch classifiedErr.Kind {
+                case ErrKindPathNotFound, ErrKindRBAC, ErrKindTimeout, ErrKindPermDenied:
                         return nil, classifiedErr
                 }
-                log.Printf("  stat unavailable, retrying with find -print only")
+                log.Printf("  stat unavailable or incompatible (kind=%s), retrying with find -print only", classifiedErr.Kind)
                 stdout2, stderr2, err2 := c.getExecutor().execInPod(ctx, namespace, podName, containerName, []string{
                         "find", fullPath, "-maxdepth", "1", "-mindepth", "1", "-print",
                 })
