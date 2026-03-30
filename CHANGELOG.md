@@ -16,7 +16,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.14] - 2026-03-30
+
+### Added
+- **Native OS file picker for kubeconfig** — the Browse button now opens the operating
+  system's native file dialog (Windows Explorer, Finder, etc.) instead of the custom
+  web modal. The selected file is uploaded to the server, validated, and its path
+  is populated in the connection form automatically.
+
+### Changed
+- Go toolchain updated to **1.25** across `go.mod`, CI workflow, and release workflow.
+
+---
+
 ## [1.0.13] - 2026-03-30
+
+### Security
+- **Shell injection fix** — `listFilesFind` no longer passes the container path via
+  `sh -c "find '<path>' ..."`. The `find` command and all its arguments are now passed
+  as a Go `[]string` slice directly to the Kubernetes exec API, eliminating any risk
+  of shell metacharacter injection from paths that contain single quotes or other
+  special characters.
 
 ### Added
 - **Read-only mode** — set `KUBE_BROWSER_READ_ONLY=true` (or `=1`) to disable all
@@ -27,22 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is selected).
 - **Status API exposes `readOnly` flag** — `GET /api/status` now includes
   `"readOnly": true/false` so clients and scripts can detect the mode programmatically.
-- **5 new unit tests** — cover upload blocked (405), upload not blocked when
-  `readOnly=false`, env-var parsing (`true`, `1`, `false`, empty, arbitrary value),
-  status response field presence, and status response field value when disabled.
-
----
-
-## [1.0.12] - 2026-03-30
-
-### Security
-- **Shell injection fix** — `listFilesFind` no longer passes the container path via
-  `sh -c "find '<path>' ..."`. The `find` command and all its arguments are now passed
-  as a Go `[]string` slice directly to the Kubernetes exec API, eliminating any risk
-  of shell metacharacter injection from paths that contain single quotes or other
-  special characters.
-
-### Added
 - **Helper pod: `imagePullSecrets`** — set `KUBE_BROWSER_IMAGE_PULL_SECRET` to the
   name of an existing secret in the target namespace to authenticate against private
   container registries.
@@ -59,12 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Helper pod: extra annotations** — set `KUBE_BROWSER_EXTRA_ANNOTATIONS`
   (`key=value,…`) to add annotations for tools such as Vault injector or Datadog APM.
 - **`find` + BusyBox fallback without shell** — when `find -exec stat` fails because
-  `stat` is unavailable (BusyBox `find` does not support `-exec stat -c …`), the binary
-  now retries with a plain `find -print` call. Both calls are shell-free Go exec slices.
-- Unit tests for `parseKeyValuePairs` (11 cases) and `parseTolerations` (7 cases)
-  covering key=value pairs, JSON input, invalid input, and multiple tolerations.
+  `stat` is unavailable, the binary retries with a plain `find -print` call. Both calls
+  are shell-free Go exec slices.
+- Unit tests for `parseKeyValuePairs` (11 cases), `parseTolerations` (7 cases), and
+  read-only mode (upload blocked, env-var parsing, status response field).
 - README: new section "Helper Pod — cluster-specific configuration" with a full variable
   table and a worked example for a restricted cluster (private registry + GPU taint).
+- README: new "Read-only mode" section with env var table and behavior description.
 
 ---
 
@@ -191,7 +196,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows (amd64), and WSL.
 - GitHub Actions CI pipeline publishing versioned release archives on every tag.
 
-[Unreleased]: https://github.com/brunosvianna/kube-browser/compare/v1.0.11...HEAD
+[Unreleased]: https://github.com/brunosvianna/kube-browser/compare/v1.0.14...HEAD
+[1.0.14]: https://github.com/brunosvianna/kube-browser/compare/v1.0.13...v1.0.14
+[1.0.13]: https://github.com/brunosvianna/kube-browser/compare/v1.0.11...v1.0.13
 [1.0.11]: https://github.com/brunosvianna/kube-browser/compare/v1.0.10...v1.0.11
 [1.0.10]: https://github.com/brunosvianna/kube-browser/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/brunosvianna/kube-browser/compare/v1.0.8...v1.0.9

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go Version"/>
+  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go Version"/>
   <img src="https://img.shields.io/badge/Kubernetes-client--go-326CE5?style=flat&logo=kubernetes&logoColor=white" alt="Kubernetes"/>
   <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat" alt="Platform"/>
   <img src="https://img.shields.io/github/license/brunosvianna/kube-browser?style=flat" alt="License"/>
@@ -455,7 +455,7 @@ KubeBrowser requires at least one **Running** pod that mounts the PVC. If the PV
 
 ### Prerequisites
 
-- Go 1.21 or later
+- Go 1.25 or later
 
 ### Build
 
