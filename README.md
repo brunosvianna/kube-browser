@@ -13,6 +13,12 @@ KubeBrowser is a single binary that launches a web-based IDE for browsing, downl
 
 ---
 
+## Demo
+
+![KubeBrowser Demo](docs/kube-browser-demo.gif)
+
+---
+
 ## Why KubeBrowser?
 
 Working with files inside Kubernetes PVCs usually means chaining together `kubectl exec`, `kubectl cp`, or spinning up debug pods manually. KubeBrowser replaces that workflow with a visual file manager that:
