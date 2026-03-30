@@ -160,6 +160,57 @@ func (h *Handler) StatusHandler(w http.ResponseWriter, r *http.Request) {
         h.jsonResponse(w, resp)
 }
 
+func (h *Handler) LoadKubeconfigUploadHandler(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodPost {
+                h.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+                return
+        }
+
+        if err := r.ParseMultipartForm(4 << 20); err != nil {
+                h.jsonError(w, "Failed to parse upload: "+err.Error(), http.StatusBadRequest)
+                return
+        }
+
+        file, _, err := r.FormFile("kubeconfig")
+        if err != nil {
+                h.jsonError(w, "Missing kubeconfig file in form", http.StatusBadRequest)
+                return
+        }
+        defer file.Close()
+
+        content, err := io.ReadAll(file)
+        if err != nil {
+                h.jsonError(w, "Failed to read uploaded file", http.StatusInternalServerError)
+                return
+        }
+
+        tmp, err := os.CreateTemp("", "kube-browser-kubeconfig-*")
+        if err != nil {
+                h.jsonError(w, "Failed to create temp file", http.StatusInternalServerError)
+                return
+        }
+        defer tmp.Close()
+
+        if _, err := tmp.Write(content); err != nil {
+                h.jsonError(w, "Failed to write temp file", http.StatusInternalServerError)
+                return
+        }
+        tmpPath := tmp.Name()
+
+        info, err := k8s.ReadKubeconfig(tmpPath)
+        if err != nil {
+                os.Remove(tmpPath)
+                h.jsonError(w, "Invalid kubeconfig: "+err.Error(), http.StatusBadRequest)
+                return
+        }
+
+        h.jsonResponse(w, map[string]interface{}{
+                "path":     tmpPath,
+                "contexts": info.Contexts,
+                "current":  info.CurrentContext,
+        })
+}
+
 func (h *Handler) LoadKubeconfigHandler(w http.ResponseWriter, r *http.Request) {
         if r.Method != http.MethodPost {
                 h.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)

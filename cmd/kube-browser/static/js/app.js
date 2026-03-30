@@ -515,14 +515,69 @@ async function uploadFile(file) {
 
 let fileBrowserSelectedPath = '';
 
-async function openFileBrowser() {
-    const modal = $('#file-browser-modal');
-    modal.classList.remove('hidden');
-    const currentPath = $('#kubeconfig-path').value;
-    const dirPath = currentPath ? currentPath.replace(/[/\\][^/\\]*$/, '') : '';
-    const ok = dirPath ? await browseDir(dirPath, true) : false;
-    if (!ok) {
-        await browseDir('');
+function openFileBrowser() {
+    $('#kubeconfig-file-input').value = '';
+    $('#kubeconfig-file-input').click();
+}
+
+async function handleKubeconfigFileSelected(file) {
+    if (!file) return;
+
+    const pathInput = $('#kubeconfig-path');
+    const origPlaceholder = pathInput.placeholder;
+    pathInput.placeholder = 'Uploading…';
+    pathInput.disabled = true;
+
+    try {
+        const formData = new FormData();
+        formData.append('kubeconfig', file);
+
+        const res = await fetch('/api/kubeconfig-upload', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (!res.ok) {
+            showToast(data.error || 'Failed to load kubeconfig', 'error');
+            return;
+        }
+
+        pathInput.value = data.path;
+
+        const contextSelect = $('#context-select');
+        const nsSelect = $('#connect-namespace-select');
+        const connectBtn = $('#connect-btn');
+        const errorDiv = $('#connection-error');
+        errorDiv.classList.add('hidden');
+        contextSelect.innerHTML = '';
+        if (data.contexts && data.contexts.length > 0) {
+            data.contexts.forEach(ctx => {
+                const opt = document.createElement('option');
+                opt.value = ctx.name;
+                opt.textContent = ctx.name;
+                if (ctx.name === data.current) opt.selected = true;
+                contextSelect.appendChild(opt);
+            });
+            contextSelect.disabled = false;
+            connectBtn.disabled = false;
+            nsSelect.innerHTML = '<option value="">All namespaces</option>';
+            const selectedCtx = data.contexts.find(c => c.name === data.current) || data.contexts[0];
+            if (selectedCtx && selectedCtx.namespace) {
+                const opt = document.createElement('option');
+                opt.value = selectedCtx.namespace;
+                opt.textContent = selectedCtx.namespace;
+                opt.selected = true;
+                nsSelect.appendChild(opt);
+            }
+            nsSelect.disabled = false;
+        } else {
+            contextSelect.innerHTML = '<option value="">No contexts found</option>';
+        }
+
+        showToast('Kubeconfig loaded', 'success');
+    } catch (e) {
+        showToast('Failed to upload kubeconfig: ' + e.message, 'error');
+    } finally {
+        pathInput.disabled = false;
+        pathInput.placeholder = origPlaceholder;
     }
 }
 
@@ -610,6 +665,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     $('#load-kubeconfig-btn').addEventListener('click', loadKubeconfig);
     $('#browse-kubeconfig-btn').addEventListener('click', openFileBrowser);
+    $('#kubeconfig-file-input').addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (file) handleKubeconfigFileSelected(file);
+    });
 
     $('#file-browser-close').addEventListener('click', closeFileBrowser);
     $('#file-browser-cancel').addEventListener('click', closeFileBrowser);
