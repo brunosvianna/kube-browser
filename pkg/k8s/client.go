@@ -695,11 +695,17 @@ func (c *Client) listFilesFind(ctx context.Context, namespace, podName, containe
 
 func (c *Client) tryListFiles(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         log.Printf("Trying GNU ls on %s/%s (container: %s, mount: %s)", namespace, podName, containerName, mountPath)
+
+        var collectedErrs []*K8sError
+
         files, err := c.listFilesGNUls(ctx, namespace, podName, containerName, mountPath, path)
         if err == nil {
                 return files, nil
         }
         log.Printf("GNU ls failed: %v", err)
+        if k, ok := err.(*K8sError); ok {
+                collectedErrs = append(collectedErrs, k)
+        }
 
         log.Printf("Trying BusyBox ls")
         files, err = c.listFilesBusybox(ctx, namespace, podName, containerName, mountPath, path)
@@ -707,6 +713,9 @@ func (c *Client) tryListFiles(ctx context.Context, namespace, podName, container
                 return files, nil
         }
         log.Printf("BusyBox ls failed: %v", err)
+        if k, ok := err.(*K8sError); ok {
+                collectedErrs = append(collectedErrs, k)
+        }
 
         log.Printf("Trying find+stat")
         files, err = c.listFilesFind(ctx, namespace, podName, containerName, mountPath, path)
@@ -714,7 +723,13 @@ func (c *Client) tryListFiles(ctx context.Context, namespace, podName, container
                 return files, nil
         }
         log.Printf("find+stat failed: %v", err)
+        if k, ok := err.(*K8sError); ok {
+                collectedErrs = append(collectedErrs, k)
+        }
 
+        if best := mostActionableError(collectedErrs...); best != nil {
+                return nil, best
+        }
         return nil, err
 }
 
