@@ -25,11 +25,21 @@ import (
         "k8s.io/client-go/tools/remotecommand"
 )
 
+type execFunc func(ctx context.Context, namespace, podName, containerName string, cmd []string) (stdout, stderr string, err error)
+
 type Client struct {
-        clientset      *kubernetes.Clientset
+        clientset      kubernetes.Interface
         restConfig     *rest.Config
         KubeconfigPath string
         ContextName    string
+        execFn         execFunc
+}
+
+func (c *Client) doExec(ctx context.Context, namespace, podName, containerName string, cmd []string) (string, string, error) {
+        if c.execFn != nil {
+                return c.execFn(ctx, namespace, podName, containerName, cmd)
+        }
+        return c.execInPod(ctx, namespace, podName, containerName, cmd)
 }
 
 type PVCInfo struct {
@@ -516,7 +526,7 @@ func (c *Client) CleanupOrphanedHelperPods(ctx context.Context) {
 
 func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, stderr, err := c.execInPod(ctx, namespace, podName, containerName, []string{
+        stdout, stderr, err := c.doExec(ctx, namespace, podName, containerName, []string{
                 "ls", "-la", "--time-style=long-iso", fullPath,
         })
         if err != nil {
@@ -525,46 +535,12 @@ func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, contain
                 }
                 return nil, classifyExecError(err, stderr)
         }
-
-        var files []FileInfo
-        lines := strings.Split(stdout, "\n")
-        for _, line := range lines {
-                line = strings.TrimSpace(line)
-                if line == "" || strings.HasPrefix(line, "total") {
-                        continue
-                }
-
-                fields := strings.Fields(line)
-                if len(fields) < 8 {
-                        continue
-                }
-
-                name := strings.Join(fields[7:], " ")
-                if name == "." || name == ".." {
-                        continue
-                }
-
-                isDir := strings.HasPrefix(fields[0], "d")
-                filePath := path + "/" + name
-                if path == "" || path == "/" {
-                        filePath = name
-                }
-
-                files = append(files, FileInfo{
-                        Name:    name,
-                        Size:    fields[4],
-                        ModTime: fields[5] + " " + fields[6],
-                        IsDir:   isDir,
-                        Path:    filePath,
-                })
-        }
-
-        return files, nil
+        return parseGNUlsOutput(stdout, path), nil
 }
 
 func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, stderr, err := c.execInPod(ctx, namespace, podName, containerName, []string{
+        stdout, stderr, err := c.doExec(ctx, namespace, podName, containerName, []string{
                 "ls", "-la", fullPath,
         })
         if err != nil {
@@ -573,61 +549,12 @@ func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, conta
                 }
                 return nil, classifyExecError(err, stderr)
         }
-
-        var files []FileInfo
-        lines := strings.Split(stdout, "\n")
-        for _, line := range lines {
-                line = strings.TrimSpace(line)
-                if line == "" || strings.HasPrefix(line, "total") {
-                        continue
-                }
-
-                fields := strings.Fields(line)
-                if len(fields) < 6 {
-                        continue
-                }
-
-                isDir := strings.HasPrefix(fields[0], "d")
-
-                var name, size, modTime string
-                if len(fields) >= 9 {
-                        size = fields[4]
-                        modTime = fields[5] + " " + fields[6] + " " + fields[7]
-                        name = strings.Join(fields[8:], " ")
-                } else if len(fields) >= 8 {
-                        size = fields[4]
-                        modTime = fields[5] + " " + fields[6]
-                        name = strings.Join(fields[7:], " ")
-                } else {
-                        size = fields[3]
-                        modTime = fields[4]
-                        name = strings.Join(fields[5:], " ")
-                }
-
-                if name == "." || name == ".." || name == "" {
-                        continue
-                }
-
-                filePath := path + "/" + name
-                if path == "" || path == "/" {
-                        filePath = name
-                }
-
-                files = append(files, FileInfo{
-                        Name:    name,
-                        Size:    size,
-                        ModTime: modTime,
-                        IsDir:   isDir,
-                        Path:    filePath,
-                })
-        }
-
-        return files, nil
+        return parseBusyboxOutput(stdout, path), nil
 }
 
 func (c *Client) listFilesFind(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, stderr, err := c.execInPod(ctx, namespace, podName, containerName, []string{
+        stdout, stderr, err := c.doExec(ctx, namespace, podName, containerName, []string{
                 "sh", "-c", fmt.Sprintf("find '%s' -maxdepth 1 -mindepth 1 -exec stat -c '%%n|%%s|%%Y|%%F' {} \\; 2>/dev/null || find '%s' -maxdepth 1 -mindepth 1 -print", fullPath, fullPath),
         })
         if err != nil {
@@ -636,61 +563,7 @@ func (c *Client) listFilesFind(ctx context.Context, namespace, podName, containe
                 }
                 return nil, classifyExecError(err, stderr)
         }
-
-        var files []FileInfo
-        lines := strings.Split(stdout, "\n")
-        for _, line := range lines {
-                line = strings.TrimSpace(line)
-                if line == "" {
-                        continue
-                }
-
-                parts := strings.SplitN(line, "|", 4)
-                if len(parts) == 4 {
-                        name := parts[0]
-                        if strings.HasPrefix(name, fullPath) {
-                                name = strings.TrimPrefix(name, fullPath)
-                                name = strings.TrimPrefix(name, "/")
-                        }
-                        if name == "" || name == "." || name == ".." {
-                                continue
-                        }
-                        isDir := strings.Contains(parts[3], "directory")
-                        filePath := path + "/" + name
-                        if path == "" || path == "/" {
-                                filePath = name
-                        }
-                        files = append(files, FileInfo{
-                                Name:    name,
-                                Size:    parts[1],
-                                ModTime: parts[2],
-                                IsDir:   isDir,
-                                Path:    filePath,
-                        })
-                } else {
-                        name := line
-                        if strings.HasPrefix(name, fullPath) {
-                                name = strings.TrimPrefix(name, fullPath)
-                                name = strings.TrimPrefix(name, "/")
-                        }
-                        if name == "" || name == "." || name == ".." {
-                                continue
-                        }
-                        filePath := path + "/" + name
-                        if path == "" || path == "/" {
-                                filePath = name
-                        }
-                        files = append(files, FileInfo{
-                                Name:    name,
-                                Size:    "0",
-                                ModTime: "-",
-                                IsDir:   false,
-                                Path:    filePath,
-                        })
-                }
-        }
-
-        return files, nil
+        return parseFindOutput(stdout, fullPath, path), nil
 }
 
 func (c *Client) tryListFiles(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
