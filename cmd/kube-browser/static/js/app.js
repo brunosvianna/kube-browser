@@ -493,20 +493,20 @@ async function openFileBrowser() {
     modal.classList.remove('hidden');
     const currentPath = $('#kubeconfig-path').value;
     const dirPath = currentPath ? currentPath.replace(/[/\\][^/\\]*$/, '') : '';
-    await browseDir(dirPath);
-    if (!$('#file-browser-list').hasChildNodes()) {
+    const ok = dirPath ? await browseDir(dirPath, true) : false;
+    if (!ok) {
         await browseDir('');
     }
 }
 
-async function browseDir(dirPath) {
+async function browseDir(dirPath, silent = false) {
     try {
         const params = dirPath ? `?path=${encodeURIComponent(dirPath)}` : '';
         const res = await fetch(`/api/browse${params}`);
         const data = await res.json();
         if (!res.ok) {
-            showToast(data.error || 'Failed to browse', 'error');
-            return;
+            if (!silent) showToast(data.error || 'Failed to browse', 'error');
+            return false;
         }
 
         fileBrowserSelectedPath = '';
@@ -559,8 +559,10 @@ async function browseDir(dirPath) {
                 list.appendChild(item);
             });
         }
+        return true;
     } catch (e) {
-        showToast('Failed to browse filesystem', 'error');
+        if (!silent) showToast('Failed to browse filesystem', 'error');
+        return false;
     }
 }
 
