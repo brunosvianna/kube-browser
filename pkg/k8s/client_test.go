@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -16,58 +17,53 @@ import (
 	ktesting "k8s.io/client-go/testing"
 )
 
-func errExec(err error) execFunc {
-	return func(_ context.Context, _, _, _ string, _ []string) (string, string, error) {
-		return "", "", err
-	}
-}
-
-func errExecWithStderr(err error, stderr string) execFunc {
-	return func(_ context.Context, _, _, _ string, _ []string) (string, string, error) {
-		return "", stderr, err
-	}
-}
-
-func okExecWith(stdout string) execFunc {
-	return func(_ context.Context, _, _, _ string, _ []string) (string, string, error) {
-		return stdout, "", nil
-	}
-}
-
-type callCountExec struct {
-	count   int
-	results []execResult
-}
-
-type execResult struct {
-	stdout string
-	stderr string
-	err    error
-}
-
-func (m *callCountExec) fn() execFunc {
-	return func(_ context.Context, _, _, _ string, _ []string) (string, string, error) {
-		idx := m.count
-		m.count++
-		if idx >= len(m.results) {
-			return "", "", fmt.Errorf("unexpected exec call #%d", idx)
-		}
-		r := m.results[idx]
-		return r.stdout, r.stderr, r.err
-	}
-}
-
-func newTestClient(fn execFunc) *Client {
+func newMockClient(mock *mockPodExecutor) *Client {
 	return &Client{
 		clientset: fake.NewSimpleClientset(),
-		execFn:    fn,
+		executor:  mock,
+	}
+}
+
+func runningPodWithPVC(pvcName string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app-pod",
+			Namespace: "default",
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "node-1",
+			Volumes: []corev1.Volume{
+				{
+					Name: "data-vol",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: pvcName,
+						},
+					},
+				},
+			},
+			Containers: []corev1.Container{
+				{
+					Name:  "app",
+					Image: "alpine",
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "data-vol", MountPath: "/data"},
+					},
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+		},
 	}
 }
 
 func TestTryListFilesGNUlsSucceeds(t *testing.T) {
 	stdout := `total 4
 -rw-r--r-- 1 root root 42 2024-01-15 10:30 hello.txt`
-	c := newTestClient(okExecWith(stdout))
+	mock := &mockPodExecutor{}
+	mock.pushExec(stdout, "", nil)
+	c := newMockClient(mock)
 	files, err := c.tryListFiles(context.Background(), "ns", "pod", "container", "/data", "/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -85,13 +81,11 @@ func TestTryListFilesGNUlsFailsBusyboxSucceeds(t *testing.T) {
 -rw-r--r--    1 root     root           10 Jan 15 10:30 data.csv`
 	noShellErr := fmt.Errorf("command terminated with exit code 127")
 
-	m := &callCountExec{
-		results: []execResult{
-			{err: noShellErr, stderr: "sh: ls: not found"},
-			{stdout: busyboxStdout},
-		},
-	}
-	c := newTestClient(m.fn())
+	mock := &mockPodExecutor{}
+	mock.pushExec("", "sh: ls: not found", noShellErr)
+	mock.pushExec(busyboxStdout, "", nil)
+	c := newMockClient(mock)
+
 	files, err := c.tryListFiles(context.Background(), "ns", "pod", "container", "/data", "/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -105,14 +99,12 @@ func TestTryListFilesAllFailReturnsRBACOverNoShell(t *testing.T) {
 	rbacErr := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "pod", fmt.Errorf("no exec"))
 	noShellErr := fmt.Errorf("command terminated with exit code 127")
 
-	m := &callCountExec{
-		results: []execResult{
-			{err: rbacErr, stderr: ""},
-			{err: noShellErr, stderr: "sh: ls: not found"},
-			{err: noShellErr, stderr: "sh: find: not found"},
-		},
-	}
-	c := newTestClient(m.fn())
+	mock := &mockPodExecutor{}
+	mock.pushExec("", "", rbacErr)
+	mock.pushExec("", "sh: ls: not found", noShellErr)
+	mock.pushExec("", "sh: find: not found", noShellErr)
+	c := newMockClient(mock)
+
 	_, err := c.tryListFiles(context.Background(), "ns", "pod", "container", "/data", "/")
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -129,14 +121,12 @@ func TestTryListFilesAllFailReturnsRBACOverNoShell(t *testing.T) {
 func TestTryListFilesAllFailReturnsNoShell(t *testing.T) {
 	noShellErr := fmt.Errorf("command terminated with exit code 127")
 
-	m := &callCountExec{
-		results: []execResult{
-			{err: noShellErr, stderr: "sh: ls: not found"},
-			{err: noShellErr, stderr: "sh: ls: not found"},
-			{err: noShellErr, stderr: "sh: find: not found"},
-		},
-	}
-	c := newTestClient(m.fn())
+	mock := &mockPodExecutor{}
+	mock.pushExec("", "sh: ls: not found", noShellErr)
+	mock.pushExec("", "sh: ls: not found", noShellErr)
+	mock.pushExec("", "sh: find: not found", noShellErr)
+	c := newMockClient(mock)
+
 	_, err := c.tryListFiles(context.Background(), "ns", "pod", "container", "/data", "/")
 	var k8sErr *K8sError
 	if !errors.As(err, &k8sErr) {
@@ -148,14 +138,12 @@ func TestTryListFilesAllFailReturnsNoShell(t *testing.T) {
 }
 
 func TestTryListFilesTimeoutPropagated(t *testing.T) {
-	m := &callCountExec{
-		results: []execResult{
-			{err: context.DeadlineExceeded},
-			{err: context.DeadlineExceeded},
-			{err: context.DeadlineExceeded},
-		},
-	}
-	c := newTestClient(m.fn())
+	mock := &mockPodExecutor{}
+	mock.pushExec("", "", context.DeadlineExceeded)
+	mock.pushExec("", "", context.DeadlineExceeded)
+	mock.pushExec("", "", context.DeadlineExceeded)
+	c := newMockClient(mock)
+
 	_, err := c.tryListFiles(context.Background(), "ns", "pod", "container", "/data", "/")
 	var k8sErr *K8sError
 	if !errors.As(err, &k8sErr) {
@@ -168,14 +156,12 @@ func TestTryListFilesTimeoutPropagated(t *testing.T) {
 
 func TestTryListFilesPathNotFound(t *testing.T) {
 	pathErr := fmt.Errorf("command terminated with exit code 2")
-	m := &callCountExec{
-		results: []execResult{
-			{err: pathErr, stderr: "ls: /nonexistent: No such file or directory"},
-			{err: pathErr, stderr: "ls: /nonexistent: No such file or directory"},
-			{err: pathErr, stderr: "ls: /nonexistent: No such file or directory"},
-		},
-	}
-	c := newTestClient(m.fn())
+	mock := &mockPodExecutor{}
+	mock.pushExec("", "ls: /nonexistent: No such file or directory", pathErr)
+	mock.pushExec("", "ls: /nonexistent: No such file or directory", pathErr)
+	mock.pushExec("", "ls: /nonexistent: No such file or directory", pathErr)
+	c := newMockClient(mock)
+
 	_, err := c.tryListFiles(context.Background(), "ns", "pod", "container", "/data", "/nonexistent")
 	var k8sErr *K8sError
 	if !errors.As(err, &k8sErr) {
@@ -183,6 +169,91 @@ func TestTryListFilesPathNotFound(t *testing.T) {
 	}
 	if k8sErr.Kind != ErrKindPathNotFound {
 		t.Errorf("expected PathNotFound kind, got %q", k8sErr.Kind)
+	}
+}
+
+func TestListFilesDirectSucceeds(t *testing.T) {
+	const pvcName = "my-pvc"
+	stdout := `total 4
+-rw-r--r-- 1 root root 100 2024-01-15 10:30 direct.txt`
+
+	fakeClient := fake.NewSimpleClientset(runningPodWithPVC(pvcName))
+	mock := &mockPodExecutor{}
+	mock.pushExec(stdout, "", nil)
+
+	c := &Client{clientset: fakeClient, executor: mock}
+	files, err := c.ListFiles(context.Background(), "default", pvcName, "/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(files) != 1 || files[0].Name != "direct.txt" {
+		t.Errorf("unexpected files: %v", files)
+	}
+	if mock.createCalled != 0 {
+		t.Error("expected no helper pod creation for direct success")
+	}
+}
+
+func TestListFilesDirectFailsFallsBackToHelperPod(t *testing.T) {
+	const pvcName = "my-pvc"
+	noShellErr := fmt.Errorf("command terminated with exit code 127")
+	helperStdout := `total 4
+-rw-r--r-- 1 root root 200 2024-01-15 10:30 from-helper.txt`
+
+	fakeClient := fake.NewSimpleClientset(runningPodWithPVC(pvcName))
+	mock := &mockPodExecutor{
+		createResult: "kube-browser-helper-abc",
+	}
+	mock.pushExec("", "sh: ls: not found", noShellErr)
+	mock.pushExec("", "sh: ls: not found", noShellErr)
+	mock.pushExec("", "sh: find: not found", noShellErr)
+	mock.pushExec(helperStdout, "", nil)
+
+	c := &Client{clientset: fakeClient, executor: mock}
+	files, err := c.ListFiles(context.Background(), "default", pvcName, "/")
+	if err != nil {
+		t.Fatalf("unexpected error from ListFiles: %v", err)
+	}
+	if len(files) != 1 || files[0].Name != "from-helper.txt" {
+		t.Errorf("unexpected files: %v", files)
+	}
+	if mock.createCalled != 1 {
+		t.Errorf("expected 1 helper pod creation, got %d", mock.createCalled)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	mock.mu.Lock()
+	deleteCalled := mock.deleteCalled
+	mock.mu.Unlock()
+	if deleteCalled != 1 {
+		t.Errorf("expected 1 helper pod deletion, got %d", deleteCalled)
+	}
+}
+
+func TestListFilesDirectFailsHelperPodCreateFails(t *testing.T) {
+	const pvcName = "my-pvc"
+	noShellErr := fmt.Errorf("command terminated with exit code 127")
+	rbacErr := &K8sError{Kind: ErrKindRBAC, Message: "pods forbidden"}
+
+	fakeClient := fake.NewSimpleClientset(runningPodWithPVC(pvcName))
+	mock := &mockPodExecutor{
+		createErr: rbacErr,
+	}
+	mock.pushExec("", "sh: ls: not found", noShellErr)
+	mock.pushExec("", "sh: ls: not found", noShellErr)
+	mock.pushExec("", "sh: find: not found", noShellErr)
+
+	c := &Client{clientset: fakeClient, executor: mock}
+	_, err := c.ListFiles(context.Background(), "default", pvcName, "/")
+	if err == nil {
+		t.Fatal("expected error when helper pod creation fails")
+	}
+	var k8sErr *K8sError
+	if !errors.As(err, &k8sErr) {
+		t.Fatalf("expected *K8sError, got %T: %v", err, err)
+	}
+	if k8sErr.Kind != ErrKindRBAC {
+		t.Errorf("expected RBAC kind, got %q", k8sErr.Kind)
 	}
 }
 

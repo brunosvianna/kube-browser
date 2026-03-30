@@ -25,21 +25,19 @@ import (
         "k8s.io/client-go/tools/remotecommand"
 )
 
-type execFunc func(ctx context.Context, namespace, podName, containerName string, cmd []string) (stdout, stderr string, err error)
-
 type Client struct {
         clientset      kubernetes.Interface
         restConfig     *rest.Config
         KubeconfigPath string
         ContextName    string
-        execFn         execFunc
+        executor       PodExecutor
 }
 
-func (c *Client) doExec(ctx context.Context, namespace, podName, containerName string, cmd []string) (string, string, error) {
-        if c.execFn != nil {
-                return c.execFn(ctx, namespace, podName, containerName, cmd)
+func (c *Client) getExecutor() PodExecutor {
+        if c.executor != nil {
+                return c.executor
         }
-        return c.execInPod(ctx, namespace, podName, containerName, cmd)
+        return c
 }
 
 type PVCInfo struct {
@@ -526,7 +524,7 @@ func (c *Client) CleanupOrphanedHelperPods(ctx context.Context) {
 
 func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, stderr, err := c.doExec(ctx, namespace, podName, containerName, []string{
+        stdout, stderr, err := c.getExecutor().execInPod(ctx, namespace, podName, containerName, []string{
                 "ls", "-la", "--time-style=long-iso", fullPath,
         })
         if err != nil {
@@ -540,7 +538,7 @@ func (c *Client) listFilesGNUls(ctx context.Context, namespace, podName, contain
 
 func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, stderr, err := c.doExec(ctx, namespace, podName, containerName, []string{
+        stdout, stderr, err := c.getExecutor().execInPod(ctx, namespace, podName, containerName, []string{
                 "ls", "-la", fullPath,
         })
         if err != nil {
@@ -554,7 +552,7 @@ func (c *Client) listFilesBusybox(ctx context.Context, namespace, podName, conta
 
 func (c *Client) listFilesFind(ctx context.Context, namespace, podName, containerName, mountPath, path string) ([]FileInfo, error) {
         fullPath := mountPath + "/" + path
-        stdout, stderr, err := c.doExec(ctx, namespace, podName, containerName, []string{
+        stdout, stderr, err := c.getExecutor().execInPod(ctx, namespace, podName, containerName, []string{
                 "sh", "-c", fmt.Sprintf("find '%s' -maxdepth 1 -mindepth 1 -exec stat -c '%%n|%%s|%%Y|%%F' {} \\; 2>/dev/null || find '%s' -maxdepth 1 -mindepth 1 -print", fullPath, fullPath),
         })
         if err != nil {
@@ -620,7 +618,8 @@ func (c *Client) ListFiles(ctx context.Context, namespace, pvcName, path string)
         }
 
         log.Printf("Direct exec failed, creating helper pod for PVC %s on node %s", pvcName, info.nodeName)
-        helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName, info.nodeName)
+        ex := c.getExecutor()
+        helperName, helperErr := ex.createHelperPod(ctx, namespace, pvcName, info.volumeName, info.nodeName)
         if helperErr != nil {
                 log.Printf("Direct exec error was: %v", err)
                 return nil, helperErr
@@ -628,7 +627,7 @@ func (c *Client) ListFiles(ctx context.Context, namespace, pvcName, path string)
 
         files, helperErr = c.tryListFiles(ctx, namespace, helperName, "helper", "/data", path)
 
-        go c.deleteHelperPod(context.Background(), namespace, helperName)
+        go ex.deleteHelperPod(context.Background(), namespace, helperName)
 
         if helperErr != nil {
                 return nil, fmt.Errorf("failed to list files even with helper pod: %w", helperErr)
@@ -707,13 +706,14 @@ func (c *Client) DownloadFile(ctx context.Context, namespace, pvcName, filePath 
                 }
 
                 log.Printf("Direct download failed, trying helper pod on node %s", nodeName)
-                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, volumeName, nodeName)
+                ex := c.getExecutor()
+                helperName, helperErr := ex.createHelperPod(ctx, namespace, pvcName, volumeName, nodeName)
                 if helperErr != nil {
                         pw.CloseWithError(fmt.Errorf("download failed: %v", err))
                         return
                 }
                 defer func() {
-                        go c.deleteHelperPod(context.Background(), namespace, helperName)
+                        go ex.deleteHelperPod(context.Background(), namespace, helperName)
                 }()
 
                 helperPath := "/data/" + filePath
@@ -748,12 +748,13 @@ func (c *Client) UploadFile(ctx context.Context, namespace, pvcName, destPath st
 
         if execErr != nil {
                 log.Printf("Direct upload failed, trying helper pod on node %s", info.nodeName)
-                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName, info.nodeName)
+                ex := c.getExecutor()
+                helperName, helperErr := ex.createHelperPod(ctx, namespace, pvcName, info.volumeName, info.nodeName)
                 if helperErr != nil {
                         return fmt.Errorf("upload failed: %v", execErr)
                 }
                 defer func() {
-                        go c.deleteHelperPod(context.Background(), namespace, helperName)
+                        go ex.deleteHelperPod(context.Background(), namespace, helperName)
                 }()
 
                 helperPath := "/data/" + destPath

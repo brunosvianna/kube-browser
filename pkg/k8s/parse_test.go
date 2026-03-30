@@ -266,3 +266,141 @@ func TestParseFindOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestParseGNUlsSymlink(t *testing.T) {
+	stdout := `total 4
+lrwxrwxrwx 1 root root 11 2024-01-15 10:30 link -> /etc/hosts
+-rw-r--r-- 1 root root 42 2024-01-15 10:30 file.txt`
+	got := parseGNUlsOutput(stdout, "/data")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(got))
+	}
+	if got[0].IsDir {
+		t.Error("symlink should not be marked as directory")
+	}
+	if got[0].Name != "link -> /etc/hosts" {
+		t.Errorf("symlink name: got %q, want %q", got[0].Name, "link -> /etc/hosts")
+	}
+}
+
+func TestParseGNUlsMalformedVariants(t *testing.T) {
+	tests := []struct {
+		name    string
+		stdout  string
+		wantLen int
+	}{
+		{
+			name:    "too few fields skipped",
+			stdout:  "-rw-r--r-- 1 root root 42 2024-01-15",
+			wantLen: 0,
+		},
+		{
+			name:    "only total line",
+			stdout:  "total 0",
+			wantLen: 0,
+		},
+		{
+			name:    "whitespace-only lines ignored",
+			stdout:  "   \n\t\n-rw-r--r-- 1 root root 10 2024-01-15 10:30 ok.txt",
+			wantLen: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseGNUlsOutput(tt.stdout, "/data")
+			if len(got) != tt.wantLen {
+				t.Errorf("got %d, want %d; entries: %v", len(got), tt.wantLen, got)
+			}
+		})
+	}
+}
+
+func TestParseBusyboxSymlink(t *testing.T) {
+	stdout := `total 4
+lrwxrwxrwx    1 root     root           7 Jan 15 10:30 mylink -> target1
+-rw-r--r--    1 root     root          10 Jan 15 10:30 real.txt`
+	got := parseBusyboxOutput(stdout, "/data")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(got))
+	}
+	if got[0].IsDir {
+		t.Error("symlink should not be marked as directory")
+	}
+	if got[0].Name != "mylink -> target1" {
+		t.Errorf("symlink name: got %q, want %q", got[0].Name, "mylink -> target1")
+	}
+}
+
+func TestParseBusyboxMalformedVariants(t *testing.T) {
+	tests := []struct {
+		name    string
+		stdout  string
+		wantLen int
+	}{
+		{
+			name:    "fewer than 6 fields skipped",
+			stdout:  "-rw-r--r-- 1 root root 10",
+			wantLen: 0,
+		},
+		{
+			name:    "blank lines ignored",
+			stdout:  "\n\n-rw-r--r--    1 root     root           10 Jan 15 10:30 f.txt\n\n",
+			wantLen: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseBusyboxOutput(tt.stdout, "/data")
+			if len(got) != tt.wantLen {
+				t.Errorf("got %d, want %d; entries: %v", len(got), tt.wantLen, got)
+			}
+		})
+	}
+}
+
+func TestParseFindSymlink(t *testing.T) {
+	stdout := "/data/mylink|0|1705310400|symbolic link\n"
+	got := parseFindOutput(stdout, "/data", "/data")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(got))
+	}
+	if got[0].IsDir {
+		t.Error("symbolic link should not be marked as directory")
+	}
+	if got[0].Name != "mylink" {
+		t.Errorf("Name: got %q, want %q", got[0].Name, "mylink")
+	}
+}
+
+func TestParseFindMalformedVariants(t *testing.T) {
+	tests := []struct {
+		name    string
+		stdout  string
+		wantLen int
+	}{
+		{
+			name:    "blank line skipped",
+			stdout:  "\n\n/data/ok.txt|10|1705310400|regular file\n",
+			wantLen: 1,
+		},
+		{
+			name:    "root fullPath entry itself skipped",
+			stdout:  "/data|0|1705310400|directory\n/data/sub|0|1705310400|directory\n",
+			wantLen: 1,
+		},
+		{
+			name:    "plain path with spaces treated as name",
+			stdout:  "/data/my file.txt\n",
+			wantLen: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseFindOutput(tt.stdout, "/data", "/data")
+			if len(got) != tt.wantLen {
+				t.Errorf("got %d, want %d; entries: %v", len(got), tt.wantLen, got)
+			}
+		})
+	}
+}
+
