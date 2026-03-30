@@ -1,0 +1,100 @@
+Quero que você configure um sistema de changelog maduro para este projeto Go chamado KubeBrowser.
+
+Objetivo:
+- Criar um arquivo `CHANGELOG.md` na raiz do projeto
+- Seguir o padrão "Keep a Changelog"
+- Usar versionamento semântico (SemVer)
+- Deixar o changelog útil para humanos, não só baseado em commits
+- Preparar a estrutura para futuras releases no GitHub
+
+Faça exatamente o seguinte:
+
+1. Crie um arquivo `CHANGELOG.md` na raiz com esta estrutura inicial:
+
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on Keep a Changelog
+and this project adheres to Semantic Versioning.
+
+## [Unreleased]
+
+### Added
+### Changed
+### Fixed
+### Security
+
+## [1.0.10] - 2026-03-30
+
+### Added
+- Initial public release structure consolidated.
+
+### Changed
+- Improved project packaging and release distribution.
+
+### Fixed
+- General fixes and adjustments across previous patch releases.
+
+### Security
+- Local-only protections and safety improvements documented as part of project hardening.
+
+2. Revise o conteúdo para que o inglês fique natural e profissional, mas sem inventar funcionalidades que não existam no projeto.
+- Se alguma linha da versão 1.0.10 não puder ser afirmada com segurança pelo código atual, substitua por uma descrição mais neutra.
+- Não invente features.
+- Não invente correções específicas sem evidência.
+
+3. Adicione um arquivo `docs/releasing.md` explicando o processo de release:
+- Como atualizar o bloco `[Unreleased]`
+- Como mover mudanças para uma nova versão
+- Como nomear versões patch, minor e major
+- Como escrever release notes curtas e úteis
+- Quando usar Added / Changed / Fixed / Security
+- Exemplos práticos para este projeto
+
+4. Revise o workflow atual de release do GitHub Actions e proponha melhorias para integrar melhor com o changelog.
+- Não faça mudanças destrutivas.
+- Se encontrar `generate_release_notes: true`, sugira como complementar isso com notas manuais baseadas no `CHANGELOG.md`
+- Se fizer alterações no workflow, explique claramente o que mudou e por quê
+
+5. Crie também um arquivo `.github/pull_request_template.md` com uma seção simples para o autor informar:
+- tipo da mudança (Added / Changed / Fixed / Security)
+- impacto para usuário
+- se precisa entrar no changelog
+- notas de release resumidas
+
+Modelo sugerido:
+## Type of change
+- [ ] Added
+- [ ] Changed
+- [ ] Fixed
+- [ ] Security
+
+## User impact
+Describe what changes for the end user.
+
+## Changelog
+- [ ] This change should be added to CHANGELOG.md
+- [ ] No changelog entry needed
+
+## Release notes summary
+Short summary for the next release.
+
+6. Se fizer sentido, crie comentários no `CHANGELOG.md` ou no `docs/releasing.md` explicando boas práticas:
+- cada release deve ter Highlights
+- usar patch para correções
+- usar minor para novas features compatíveis
+- usar major para breaking changes
+- evitar copiar commits brutos para o changelog
+
+7. No final, me entregue:
+- resumo do que foi criado/alterado
+- conteúdo dos arquivos novos
+- sugestões de próximos passos
+- um exemplo de como ficaria a próxima release `v1.0.11`
+
+Importante:
+- Não invente informações
+- Não remova nada importante do projeto
+- Mantenha tudo simples, profissional e sustentável
+- Priorize clareza para a comunidade open source
