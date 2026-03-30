@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KubeBrowser - PVC File Manager</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <div class="logo">
+                <svg viewBox="0 0 32 32" width="28" height="28" fill="none">
+                    <circle cx="16" cy="16" r="14" stroke="#326CE5" stroke-width="2"/>
+                    <path d="M16 6L16 26M6 16L26 16M9 9L23 23M23 9L9 23" stroke="#326CE5" stroke-width="1.5" opacity="0.4"/>
+                    <circle cx="16" cy="16" r="4" fill="#326CE5"/>
+                </svg>
+                <h1>KubeBrowser</h1>
+            </div>
+            <span class="subtitle">PVC File Manager</span>
+        </div>
+        <div class="header-right">
+            <div id="status-indicator" class="status disconnected">
+                <span class="status-dot"></span>
+                <span id="status-text">Disconnected</span>
+            </div>
+            <button id="connection-btn" class="btn btn-secondary" style="margin-left:8px">
+                <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+                    <path d="M13 7H7v6h6V7zm-2 4H9V9h2v2zm4-8h-2V1h-2v2H9V1H7v2H5c-1.1 0-2 .9-2 2v2H1v2h2v2H1v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2V9h2V7h-2V5c0-1.1-.9-2-2-2zm0 12H5V5h10v10z"/>
+                </svg>
+                Connection
+            </button>
+        </div>
+    </header>
+
+    <div id="connection-modal" class="modal">
+        <div class="modal-content modal-connection">
+            <div class="modal-header">
+                <div class="modal-header-icon">
+                    <svg viewBox="0 0 32 32" width="32" height="32" fill="none">
+                        <circle cx="16" cy="16" r="14" stroke="#326CE5" stroke-width="2"/>
+                        <circle cx="16" cy="16" r="4" fill="#326CE5"/>
+                        <path d="M16 6L16 26M6 16L26 16" stroke="#326CE5" stroke-width="1.5" opacity="0.4"/>
+                    </svg>
+                </div>
+                <div>
+                    <h3>Connection</h3>
+                    <p class="modal-subtitle">Configure kubeconfig, context and namespace</p>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Kubeconfig</label>
+                    <div class="input-with-btn">
+                        <input type="text" id="kubeconfig-path" value="{{.DefaultKubeconfig}}" placeholder="~/.kube/config">
+                        <button class="btn btn-icon" id="browse-kubeconfig-btn" title="Browse for kubeconfig file">
+                            <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+                                <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
+                            </svg>
+                        </button>
+                        <button class="btn btn-icon" id="load-kubeconfig-btn" title="Load kubeconfig">
+                            <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+                                <path d="M10 3l-5 5h3v6h4V8h3l-5-5z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Context</label>
+                        <select id="context-select" disabled>
+                            <option value="">No contexts</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Namespace</label>
+                        <select id="connect-namespace-select" disabled>
+                            <option value="">No namespaces</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="connection-error" class="connection-error hidden"></div>
+                <button id="connect-btn" class="btn btn-primary btn-full" disabled>
+                    <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+                        <path d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-11a1 1 0 1 0-2 0v3.586L7.707 9.293a1 1 0 0 0-1.414 1.414l3 3a1 1 0 0 0 1.414 0l3-3a1 1 0 0 0-1.414-1.414L11 10.586V7z"/>
+                    </svg>
+                    Connect
+                </button>
+                <button id="disconnect-btn" class="btn btn-danger btn-full hidden">
+                    <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"/>
+                    </svg>
+                    Disconnect
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <main class="hidden" id="main-content">
+        <div class="sidebar">
+            <div class="sidebar-section">
+                <label for="namespace-select">Namespace</label>
+                <select id="namespace-select">
+                    <option value="">Select namespace...</option>
+                </select>
+            </div>
+
+            <div class="sidebar-section">
+                <label>PVCs</label>
+                <div id="pvc-list" class="pvc-list">
+                    <div class="empty-state">Select a namespace</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="toolbar">
+                <div class="breadcrumb" id="breadcrumb">
+                    <span class="breadcrumb-item">Select a PVC to browse files</span>
+                </div>
+                <div class="toolbar-actions">
+                    <button id="upload-btn" class="btn btn-primary" disabled>
+                        <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+                            <path d="M10 3l-5 5h3v6h4V8h3l-5-5zM3 16h14v2H3v-2z"/>
+                        </svg>
+                        Upload
+                    </button>
+                    <button id="refresh-btn" class="btn btn-secondary" disabled>
+                        <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+                            <path d="M10 3a7 7 0 0 0-7 7h2a5 5 0 0 1 9.9-.8l-2.2.8H17V5.7l-2 2A7 7 0 0 0 10 3zM5 10a5 5 0 0 0 4.1 4.9l.9.1a5 5 0 0 0 3-1l2 2A7 7 0 0 1 3 10h2z"/>
+                        </svg>
+                        Refresh
+                    </button>
+                </div>
+            </div>
+
+            <div id="file-table-container" class="file-table-container">
+                <div class="empty-state-large">
+                    <svg viewBox="0 0 64 64" width="64" height="64" fill="none" stroke="#666" stroke-width="2">
+                        <rect x="8" y="12" width="48" height="44" rx="3"/>
+                        <path d="M8 22h48M20 12V8h24v4"/>
+                        <path d="M24 34h16M24 42h10" stroke-linecap="round"/>
+                    </svg>
+                    <p>Select a namespace and PVC to browse files</p>
+                </div>
+            </div>
+
+            <div id="upload-modal" class="modal hidden">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>Upload File</h3>
+                        <button class="modal-close" id="upload-modal-close">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="upload-zone" id="upload-zone">
+                            <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="#326CE5" stroke-width="2">
+                                <path d="M24 32V16M18 22l6-6 6 6"/>
+                                <path d="M38 32a10 10 0 0 0-3-19.5A14 14 0 0 0 10 20a10 10 0 0 0 2 20h26"/>
+                            </svg>
+                            <p>Drag & drop a file here or click to select</p>
+                            <input type="file" id="file-input" class="hidden">
+                        </div>
+                        <div id="upload-progress" class="upload-progress hidden">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progress-fill"></div>
+                            </div>
+                            <span id="upload-status">Uploading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="file-browser-modal" class="modal hidden">
+        <div class="modal-content modal-filebrowser">
+            <div class="modal-header">
+                <h3>Select Kubeconfig File</h3>
+                <button class="modal-close" id="file-browser-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="file-browser-path" id="file-browser-current-path"></div>
+                <div id="file-browser-drives"></div>
+                <div class="file-browser-list" id="file-browser-list"></div>
+                <div class="file-browser-actions">
+                    <button class="btn btn-secondary" id="file-browser-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="file-browser-select">Select</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
