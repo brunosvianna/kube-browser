@@ -114,9 +114,12 @@ func (h *Handler) IndexHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         client := h.getClient()
+        defaultKubeconfig := k8s.DefaultKubeconfigPath()
+        _, statErr := os.Stat(defaultKubeconfig)
         tmpl.Execute(w, map[string]interface{}{
-                "Connected":      client != nil,
-                "DefaultKubeconfig": k8s.DefaultKubeconfigPath(),
+                "Connected":              client != nil,
+                "DefaultKubeconfig":      defaultKubeconfig,
+                "DefaultKubeconfigExists": statErr == nil,
         })
 }
 
@@ -478,8 +481,13 @@ func (h *Handler) BrowseLocalHandler(w http.ResponseWriter, r *http.Request) {
 
         info, err := os.Stat(dirPath)
         if err != nil {
-                h.jsonError(w, fmt.Sprintf("Path not found: %s", dirPath), http.StatusBadRequest)
-                return
+                home, _ := os.UserHomeDir()
+                dirPath = home
+                info, err = os.Stat(dirPath)
+                if err != nil {
+                        h.jsonError(w, fmt.Sprintf("Cannot access home directory: %v", err), http.StatusInternalServerError)
+                        return
+                }
         }
         if !info.IsDir() {
                 dirPath = filepath.Dir(dirPath)

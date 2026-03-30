@@ -494,6 +494,9 @@ async function openFileBrowser() {
     const currentPath = $('#kubeconfig-path').value;
     const dirPath = currentPath ? currentPath.replace(/[/\\][^/\\]*$/, '') : '';
     await browseDir(dirPath);
+    if (!$('#file-browser-list').hasChildNodes()) {
+        await browseDir('');
+    }
 }
 
 async function browseDir(dirPath) {
