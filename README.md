@@ -99,31 +99,87 @@ Click on any file to download it directly to your machine.
 
 ## How It Works
 
-KubeBrowser uses the Kubernetes API (`client-go`) to interact with your cluster:
+KubeBrowser runs entirely on your machine and communicates with the cluster through the Kubernetes API using your existing kubeconfig credentials. No server-side components are installed in the cluster.
+
+### Normal mode (direct exec)
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
-│ KubeBrowser │────>│  Kubernetes  │────>│   Pod / Helper  │
-│  (binary)   │<────│     API      │<────│   Pod (alpine)  │
-└─────────────┘     └──────────────┘     └─────┬───────────┘
-       │                                       │
-       │            Web UI (embedded)          PVC
-       └──> Browser ──────────────────>   /mounted/path
+  Your machine
+  ┌─────────────────────────────────────────────────────────────┐
+  │                                                             │
+  │  Browser ──────> KubeBrowser binary (127.0.0.1:5000)       │
+  │                        │                                    │
+  │                        │  reads kubeconfig                  │
+  │                        ▼                                    │
+  │                  Kubernetes API ──> pods/exec               │
+  │                        │                                    │
+  └────────────────────────┼────────────────────────────────────┘
+                           │  exec: ls / cat / tee
+                           ▼
+                    ┌─────────────┐
+                    │  App pod    │  (already running)
+                    │             │
+                    │  /data ─────┼──> PVC contents
+                    └─────────────┘
 ```
 
-- **File listing** uses `kubectl exec` to run `ls` inside the pod that mounts the PVC.
-- **Download** streams file content via `cat` through the Kubernetes exec API.
-- **Upload** writes file content via `tee` through the Kubernetes exec API.
+1. The browser (running on the same machine) connects to KubeBrowser on `127.0.0.1:5000`.
+2. KubeBrowser locates the running pod that mounts the target PVC.
+3. File listing runs `ls` inside that pod via the Kubernetes exec API.
+4. Downloads stream file content via `cat`; uploads write via `tee`.
 
-### Helper Pod Fallback
+KubeBrowser tries three listing strategies in order, falling back when the previous one fails:
 
-Some container images (like Redis, RabbitMQ, or distroless images) don't include basic shell tools. When KubeBrowser detects this, it automatically:
+| Strategy | Command | Requires |
+|----------|---------|---------|
+| GNU ls   | `ls -la --time-style=long-iso` | GNU coreutils |
+| BusyBox ls | `ls -la` | BusyBox or any POSIX ls |
+| find + stat | `find … -exec stat …` | find + stat |
 
-1. Creates a temporary `alpine:3.19` pod that mounts the same PVC
-2. Runs file operations through the helper pod
-3. Deletes the helper pod when done
+### Helper Pod mode (fallback for minimal/distroless images)
 
-This happens transparently — no manual intervention needed.
+When all three exec strategies fail (e.g. the container has no shell at all — Redis, RabbitMQ, distroless images), KubeBrowser automatically switches to helper pod mode:
+
+```
+  Your machine
+  ┌─────────────────────────────────────────────────────────────┐
+  │                                                             │
+  │  Browser ──────> KubeBrowser binary (127.0.0.1:5000)       │
+  │                        │                                    │
+  │                        │  reads kubeconfig                  │
+  │                        ▼                                    │
+  │                  Kubernetes API                             │
+  │                   │         │                               │
+  │               pods/create  pods/exec                        │
+  └───────────────────┼─────────┼───────────────────────────────┘
+                      │         │
+                      ▼         ▼
+             ┌──────────────┐  ┌──────────────┐
+             │  App pod     │  │ Helper pod   │  (temporary alpine)
+             │  (no shell)  │  │              │
+             │              │  │  /data ──────┼──> same PVC
+             └──────────────┘  └──────────────┘
+                                      │
+                              deleted after use
+```
+
+1. KubeBrowser creates a temporary `alpine:3.19` pod on the **same node** as the original pod, mounting the same PVC.
+2. All file operations (list / download / upload) run through the helper pod.
+3. The helper pod is deleted immediately after the operation completes (or fails).
+4. Helper pods are named `kube-browser-helper-<pvc>-<timestamp>` and labelled `managed-by: kube-browser`.
+
+**What you see in the logs:**
+```
+Trying GNU ls on default/redis-pod (container: redis, mount: /data)
+  stderr: exec: "ls": executable file not found in $PATH
+Trying BusyBox ls on default/redis-pod ...
+  stderr: exec: "ls": executable file not found in $PATH
+Trying find on default/redis-pod ...
+  stderr: exec: "find": executable file not found in $PATH
+Direct exec failed, creating helper pod for PVC redis-data on node worker-1
+Creating helper pod kube-browser-helper-redis-data-1a2b3c on node worker-1 for PVC redis-data (image: alpine:3.19)
+Helper pod kube-browser-helper-redis-data-1a2b3c is running
+```
 
 ---
 
@@ -162,13 +218,22 @@ Example:
 READ_TIMEOUT=30 WRITE_TIMEOUT=120 ./kube-browser
 ```
 
+### Helper Pod tuning
+
+| Variable                  | Default      | Description                                          |
+|---------------------------|-------------|------------------------------------------------------|
+| `HELPER_IMAGE`            | `alpine:3.19` | Image used for the helper pod                      |
+| `HELPER_STARTUP_TIMEOUT_SEC` | `60`     | Seconds to wait for the helper pod to become Running |
+| `HELPER_CPU_REQUEST`      | `10m`        | CPU request for the helper pod container             |
+| `HELPER_MEM_REQUEST`      | `16Mi`       | Memory request for the helper pod container          |
+| `HELPER_CPU_LIMIT`        | `100m`       | CPU limit for the helper pod container               |
+| `HELPER_MEM_LIMIT`        | `64Mi`       | Memory limit for the helper pod container            |
+| `HELPER_RUN_AS_ROOT`      | `false`      | Set to `true` to run the helper as root (UID 0)      |
+| `HELPER_RUN_AS_USER`      | _(unset)_    | Specific UID to run the helper container as          |
+
 ### Graceful shutdown
 
 KubeBrowser handles `SIGINT` and `SIGTERM` gracefully: it stops accepting new connections and waits up to `SHUTDOWN_TIMEOUT` seconds for active requests to finish before exiting.
-
-### `/api/browse` restriction
-
-The `/api/browse` endpoint (used to navigate your local filesystem when selecting a kubeconfig) only accepts requests originating from `127.0.0.1` or `::1`. Any request from a different IP address receives a `403 Forbidden` response.
 
 ### Kubeconfig
 
@@ -178,6 +243,149 @@ KubeBrowser auto-detects your kubeconfig from:
 2. `~/.kube/config` (default path)
 
 You can also browse and select any kubeconfig file through the UI.
+
+---
+
+## Requirements
+
+### Minimum RBAC permissions
+
+For **normal mode** (direct exec into existing pods):
+
+```yaml
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
+```
+
+For **helper pod mode** (required when the app container has no shell):
+
+```yaml
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+```
+
+> `watch` is needed so KubeBrowser can poll the helper pod until it reaches `Running` state.  
+> `create` and `delete` on `pods` are **only** needed if your workloads use minimal/distroless images.
+
+A complete example ClusterRole:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-browser
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
+```
+
+---
+
+## Security
+
+### Loopback-only by default
+
+KubeBrowser binds to `127.0.0.1` by default. This means only software running on your own machine can connect to it — the port is not exposed on your LAN or the internet.
+
+If you set `HOST=0.0.0.0`, the server becomes reachable from other hosts. **Only do this on a private, trusted network.** KubeBrowser has no authentication layer — anyone who can reach the port can browse and download files from your PVCs.
+
+### `/api/browse` — localhost-only middleware
+
+The `/api/browse` endpoint lets the UI navigate your local filesystem to select a kubeconfig file. Because this endpoint exposes your local filesystem, it is protected by a middleware that checks the request's remote address:
+
+- Requests from `127.0.0.1` or `::1` → allowed
+- Any other origin → `403 Forbidden`
+
+This check runs regardless of the `HOST` setting: even if you bind to `0.0.0.0`, external clients cannot access `/api/browse`.
+
+### HTTP timeouts
+
+The HTTP server enforces configurable timeouts on every connection to protect against slow-client attacks:
+
+- **Read timeout** — caps the time to receive a full request (default 15 s).
+- **Write timeout** — caps the time to send a full response (default 60 s; set higher for large file transfers).
+- **Idle timeout** — closes keep-alive connections that have been idle too long (default 120 s).
+
+### Path traversal protection
+
+All file paths supplied by the UI are sanitized on the server before being passed to `ls`, `cat`, or `tee`. Paths are resolved through `path.Clean`; any path that still contains a `..` segment after cleaning is rejected with `400 Bad Request`.
+
+### Credentials
+
+KubeBrowser uses your existing kubeconfig credentials and respects any RBAC restrictions your cluster administrator has set. It does not store, cache, or transmit credentials beyond what `client-go` requires for the current session.
+
+---
+
+## Tested Environments
+
+KubeBrowser has been developed and tested against the following distributions:
+
+| Environment | Notes |
+|-------------|-------|
+| **AKS** (Azure Kubernetes Service) | Fully functional. Helper pod mode works unless pod security admission blocks `pods/create` in restricted namespaces. |
+| **EKS** (Amazon Elastic Kubernetes Service) | Fully functional. IAM-to-RBAC mapping must include the required verbs. |
+| **GKE** (Google Kubernetes Engine) | Fully functional. Workload Identity clusters require that the local kubeconfig uses `gke-gcloud-auth-plugin`. |
+| **k3s** | Fully functional on both single-node and multi-node setups. |
+| **minikube** | Fully functional. Helper pod mode tested with the `docker` driver. |
+| **WSL (Windows Subsystem for Linux)** | Fully functional. Run the Linux binary inside WSL; the kubeconfig from Windows (`%USERPROFILE%\.kube\config`) can be referenced via `/mnt/c/Users/<user>/.kube/config`. |
+
+---
+
+## Known Risks and Limitations
+
+### PVC with ReadWriteOnce access mode already in use
+
+A `ReadWriteOnce` PVC can only be mounted by pods running on **the same node**. KubeBrowser's helper pod is always scheduled on the same node as the existing pod, so this should work — but if the PVC is mounted read-write and you upload a large file through the helper pod while the application is writing, a write conflict is possible. Treat uploads to active RWO volumes with care.
+
+### Distroless and minimal images (no shell)
+
+Containers built from `scratch`, `gcr.io/distroless/*`, or other stripped-down bases have no shell and no filesystem utilities. KubeBrowser handles this transparently via the helper pod fallback. If the helper pod mode is also blocked (e.g. missing RBAC), a descriptive error is shown in the UI with a link to the RBAC documentation.
+
+### Clusters with PodSecurity / OPA / Gatekeeper policies
+
+Restrictive admission webhooks (Pod Security Standards in `restricted` mode, OPA Gatekeeper, Kyverno) may block the helper pod because:
+- It uses `alpine:3.19`, which may not be in the allowlist of approved images.
+- It runs as a non-root user but with `readOnlyRootFilesystem: true`, which some policies require additional configuration for.
+
+**Workaround:** set `HELPER_IMAGE` to an image allowed by your policy and, if needed, `HELPER_RUN_AS_USER` to a UID your policy accepts.
+
+### Helper pod blocked by NetworkPolicy
+
+NetworkPolicy rules that deny egress or ingress on the pod CIDR do not affect the helper pod directly (KubeBrowser communicates via the Kubernetes API, not directly to the pod's IP). However, if your cluster requires that all pods can only pull images from an internal registry, the helper pod creation will fail if `alpine:3.19` is not mirrored there.
+
+**Workaround:** mirror `alpine:3.19` to your internal registry and set `HELPER_IMAGE=your-registry.example.com/alpine:3.19`.
+
+### Private image registries
+
+If the Kubernetes nodes cannot pull `alpine:3.19` from Docker Hub (air-gapped clusters, private registries), helper pod creation will fail with an `ImagePullBackOff` error. KubeBrowser detects this and reports `ErrKindHelperPending` in the UI.
+
+**Workaround:** same as above — mirror the image and point `HELPER_IMAGE` to the internal copy.
+
+### No pod mounting the PVC
+
+KubeBrowser requires at least one **Running** pod that mounts the PVC. If the PVC exists but no running pod mounts it, the UI shows a "no running pod found" error. In that case, temporarily scale up a workload or deploy a debug pod that mounts the PVC before using KubeBrowser.
 
 ---
 
@@ -208,6 +416,12 @@ GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o kube-browser
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o kube-browser.exe ./cmd/kube-browser/
 ```
 
+### Running tests
+
+```bash
+go test ./pkg/... -timeout 60s
+```
+
 ---
 
 ## Project Structure
@@ -225,9 +439,18 @@ kube-browser/
 │   ├── browser/
 │   │   └── open.go          # Cross-platform browser auto-open
 │   ├── handlers/
-│   │   └── handlers.go      # HTTP API handlers
+│   │   ├── handlers.go      # HTTP API handlers
+│   │   └── handlers_test.go
 │   └── k8s/
-│       └── client.go        # Kubernetes client, PVC/file operations
+│       ├── client.go        # Kubernetes client, PVC/file operations
+│       ├── errors.go        # Structured error types and classification
+│       ├── executor.go      # PodExecutor interface
+│       ├── parse.go         # ls/find output parsers
+│       ├── client_test.go
+│       ├── errors_test.go
+│       ├── mock_test.go
+│       ├── parse_test.go
+│       └── paths_test.go
 ├── go.mod
 └── go.sum
 ```
@@ -237,25 +460,22 @@ kube-browser/
 - **Single binary** — All frontend assets (HTML, CSS, JS) are embedded using Go's `embed` package. No external files needed.
 - **No dependencies at runtime** — No Node.js, no Docker, no kubectl required. Just the binary and a kubeconfig.
 - **Zero configuration** — Sensible defaults, everything configurable through the UI.
+- **Testable without a cluster** — The `PodExecutor` interface allows all Kubernetes exec and pod-lifecycle calls to be replaced with in-memory mocks in tests.
 
 ---
 
-## Requirements
+## Roadmap
 
-- A valid kubeconfig with access to the target Kubernetes cluster
-- RBAC permissions: `get`, `list` on `pods`, `persistentvolumeclaims`, `namespaces`; `create` for `pods/exec`
-- For the helper pod fallback: `create`, `delete` on `pods`
+The following features are planned for future releases:
 
----
-
-## Security
-
-- KubeBrowser binds to `127.0.0.1` by default — it is not reachable from other hosts on your network.
-- The `/api/browse` endpoint (local filesystem navigation) is restricted to loopback addresses (`127.0.0.1` / `::1`).
-- The HTTP server enforces configurable read, write, and idle timeouts to protect against slow-client attacks.
-- Graceful shutdown drains active connections cleanly on `SIGINT`/`SIGTERM`.
-- Path traversal protection is enforced on all file operations.
-- The binary only communicates with the Kubernetes API using your existing kubeconfig credentials.
+| Feature | Description |
+|---------|-------------|
+| **File deletion** | Delete individual files or entire directories from a PVC. |
+| **Rename / move** | Rename files and move them between directories within the same PVC. |
+| **Integration tests** | End-to-end tests against a real cluster using `kind`, exercising the full exec and helper pod paths. |
+| **Private registry support** | UI option to configure `imagePullSecrets` for the helper pod, removing the manual `HELPER_IMAGE` workaround for air-gapped clusters. |
+| **Multi-file download** | Select and download multiple files as a single `.zip` archive. |
+| **Directory upload** | Upload entire directory trees (expanded from the current single-file upload). |
 
 ---
 
@@ -279,12 +499,24 @@ uname -m
 ```
 
 **"Failed to list files: all methods failed":**
-The container doesn't have shell tools. KubeBrowser will try to create a helper pod automatically. Make sure your RBAC permissions allow creating pods in the target namespace.
+The container doesn't have shell tools. KubeBrowser will try to create a helper pod automatically. Make sure your RBAC permissions allow `create` and `delete` on `pods` in the target namespace.
+
+**Helper pod stuck in Pending / ImagePullBackOff:**
+The node cannot pull `alpine:3.19`. Mirror the image to your internal registry and set:
+```bash
+HELPER_IMAGE=your-registry.example.com/alpine:3.19 ./kube-browser
+```
 
 **Connection fails:**
 Verify your kubeconfig works with kubectl:
 ```bash
 kubectl --kubeconfig=/path/to/config --context=your-context get pods -n your-namespace
+```
+
+**Upload or download fails silently:**
+Increase the write timeout for large files:
+```bash
+WRITE_TIMEOUT=300 ./kube-browser
 ```
 
 ---
