@@ -4,6 +4,7 @@ import (
         "context"
         "embed"
         "encoding/json"
+        "errors"
         "fmt"
         "io"
         "log"
@@ -309,6 +310,52 @@ func (h *Handler) DownloadFileHandler(w http.ResponseWriter, r *http.Request) {
         io.Copy(w, reader)
 }
 
+func maxUploadSize() int64 {
+        const defaultMax = 500 << 20
+        val := os.Getenv("MAX_UPLOAD_SIZE")
+        if val == "" {
+                return defaultMax
+        }
+        var n int64
+        if _, err := fmt.Sscanf(val, "%d", &n); err != nil || n <= 0 {
+                return defaultMax
+        }
+        return n
+}
+
+var errUploadTooLarge = errors.New("upload exceeds maximum allowed size")
+
+type limitEnforcingReader struct {
+        r        io.Reader
+        limit    int64
+        read     int64
+        exceeded bool
+}
+
+func (l *limitEnforcingReader) Read(p []byte) (int, error) {
+        if l.exceeded {
+                return 0, errUploadTooLarge
+        }
+        remaining := l.limit - l.read
+        if remaining <= 0 {
+                probe := make([]byte, 1)
+                n, err := l.r.Read(probe)
+                if n > 0 {
+                        l.exceeded = true
+                        return 0, errUploadTooLarge
+                }
+                return 0, err
+        }
+        if int64(len(p)) > remaining {
+                p = p[:remaining]
+        }
+        n, err := l.r.Read(p)
+        l.read += int64(n)
+        return n, err
+}
+
+const maxMetaFieldSize = 4096
+
 func (h *Handler) UploadFileHandler(w http.ResponseWriter, r *http.Request) {
         if r.Method != http.MethodPost {
                 h.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -321,37 +368,75 @@ func (h *Handler) UploadFileHandler(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        err := r.ParseMultipartForm(100 << 20)
+        mr, err := r.MultipartReader()
         if err != nil {
                 h.jsonError(w, "Failed to parse upload", http.StatusBadRequest)
                 return
         }
 
-        namespace := r.FormValue("namespace")
-        pvc := r.FormValue("pvc")
-        destPath := r.FormValue("path")
+        var namespace, pvc, destPath, fileName string
+        var filePart io.Reader
+
+        for {
+                part, partErr := mr.NextPart()
+                if partErr == io.EOF {
+                        break
+                }
+                if partErr != nil {
+                        h.jsonError(w, "Failed to read upload", http.StatusBadRequest)
+                        return
+                }
+
+                fieldName := part.FormName()
+                if part.FileName() != "" {
+                        rawName := part.FileName()
+                        fileName = path.Base(strings.ReplaceAll(rawName, "\\", "/"))
+                        filePart = part
+                        break
+                }
+
+                limited := io.LimitReader(part, maxMetaFieldSize)
+                b, readErr := io.ReadAll(limited)
+                if readErr != nil {
+                        h.jsonError(w, "Failed to read form field", http.StatusBadRequest)
+                        return
+                }
+                switch fieldName {
+                case "namespace":
+                        namespace = string(b)
+                case "pvc":
+                        pvc = string(b)
+                case "path":
+                        destPath = string(b)
+                }
+        }
 
         if namespace == "" || pvc == "" {
                 h.jsonError(w, "namespace and pvc are required", http.StatusBadRequest)
                 return
         }
-
-        file, header, err := r.FormFile("file")
-        if err != nil {
+        if filePart == nil {
                 h.jsonError(w, "No file provided", http.StatusBadRequest)
                 return
         }
-        defer file.Close()
+
+        maxSize := maxUploadSize()
+        limitedFile := &limitEnforcingReader{r: filePart, limit: maxSize}
 
         destPath = sanitizePath(destPath)
-        fileName := path.Base(strings.ReplaceAll(header.Filename, "\\", "/"))
         if destPath == "" || destPath == "/" {
                 destPath = "/" + fileName
         } else {
                 destPath = destPath + "/" + fileName
         }
 
-        err = client.UploadFile(r.Context(), namespace, pvc, destPath, file)
+        err = client.UploadFile(r.Context(), namespace, pvc, destPath, limitedFile)
+        if limitedFile.exceeded {
+                w.Header().Set("Content-Type", "application/json")
+                w.WriteHeader(http.StatusRequestEntityTooLarge)
+                fmt.Fprintf(w, `{"error":"file too large: maximum upload size is %d bytes"}`, maxSize)
+                return
+        }
         if err != nil {
                 h.jsonError(w, fmt.Sprintf("Failed to upload file: %v", err), http.StatusInternalServerError)
                 return
@@ -359,8 +444,8 @@ func (h *Handler) UploadFileHandler(w http.ResponseWriter, r *http.Request) {
 
         h.jsonResponse(w, map[string]interface{}{
                 "success":  true,
-                "message":  fmt.Sprintf("File %s uploaded successfully", header.Filename),
-                "filename": header.Filename,
+                "message":  fmt.Sprintf("File %s uploaded successfully", fileName),
+                "filename": fileName,
         })
 }
 

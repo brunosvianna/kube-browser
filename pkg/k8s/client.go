@@ -748,6 +748,40 @@ func (c *Client) execInPodWithContainer(ctx context.Context, namespace, podName,
         return remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
 }
 
+func (c *Client) execInPodStreaming(ctx context.Context, namespace, podName, containerName string, command []string, w io.Writer) error {
+        execOpts := &corev1.PodExecOptions{
+                Command:   command,
+                Stdout:    true,
+                Stderr:    true,
+                Container: containerName,
+        }
+
+        req := c.clientset.CoreV1().RESTClient().Post().
+                Resource("pods").
+                Name(podName).
+                Namespace(namespace).
+                SubResource("exec").
+                VersionedParams(execOpts, scheme.ParameterCodec)
+
+        exec, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
+        if err != nil {
+                return err
+        }
+
+        var stderr bytes.Buffer
+        err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+                Stdout: w,
+                Stderr: &stderr,
+        })
+        if err != nil {
+                if stderr.Len() > 0 {
+                        return fmt.Errorf("%w: %s", err, stderr.String())
+                }
+                return err
+        }
+        return nil
+}
+
 func (c *Client) DownloadFile(ctx context.Context, namespace, pvcName, filePath string) (io.Reader, string, error) {
         filePath = strings.ReplaceAll(filePath, "\\", "/")
         info, err := c.findPodForPVC(ctx, namespace, pvcName)
@@ -759,26 +793,38 @@ func (c *Client) DownloadFile(ctx context.Context, namespace, pvcName, filePath 
         fileName := gopath.Base(filePath)
         podName := info.podName
         containerName := info.containerName
+        nodeName := info.nodeName
+        volumeName := info.volumeName
 
-        stdout, _, execErr := c.execInPod(ctx, namespace, podName, containerName, []string{"cat", fullPath})
-        if execErr != nil {
-                log.Printf("Direct download failed, trying helper pod on node %s", info.nodeName)
-                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, info.volumeName, info.nodeName)
+        pr, pw := io.Pipe()
+
+        go func() {
+                err := c.execInPodStreaming(ctx, namespace, podName, containerName, []string{"cat", fullPath}, pw)
+                if err == nil {
+                        pw.Close()
+                        return
+                }
+
+                log.Printf("Direct download failed, trying helper pod on node %s", nodeName)
+                helperName, helperErr := c.createHelperPod(ctx, namespace, pvcName, volumeName, nodeName)
                 if helperErr != nil {
-                        return nil, "", fmt.Errorf("download failed: %v", execErr)
+                        pw.CloseWithError(fmt.Errorf("download failed: %v", err))
+                        return
                 }
                 defer func() {
                         go c.deleteHelperPod(context.Background(), namespace, helperName)
                 }()
-                helperPath := "/data/" + filePath
-                stdout, _, execErr = c.execInPod(ctx, namespace, helperName, "helper", []string{"cat", helperPath})
-                if execErr != nil {
-                        return nil, "", fmt.Errorf("download failed even with helper pod: %v", execErr)
-                }
-        }
 
-        reader := strings.NewReader(stdout)
-        return reader, fileName, nil
+                helperPath := "/data/" + filePath
+                helperErr = c.execInPodStreaming(ctx, namespace, helperName, "helper", []string{"cat", helperPath}, pw)
+                if helperErr != nil {
+                        pw.CloseWithError(fmt.Errorf("download failed even with helper pod: %v", helperErr))
+                        return
+                }
+                pw.Close()
+        }()
+
+        return pr, fileName, nil
 }
 
 func (c *Client) UploadFile(ctx context.Context, namespace, pvcName, destPath string, data io.Reader) error {
@@ -786,11 +832,6 @@ func (c *Client) UploadFile(ctx context.Context, namespace, pvcName, destPath st
         info, err := c.findPodForPVC(ctx, namespace, pvcName)
         if err != nil {
                 return err
-        }
-
-        var buf bytes.Buffer
-        if _, err := io.Copy(&buf, data); err != nil {
-                return fmt.Errorf("failed to read upload data: %w", err)
         }
 
         fullPath := info.mountPath + "/" + destPath
@@ -826,14 +867,17 @@ func (c *Client) UploadFile(ctx context.Context, namespace, pvcName, destPath st
                 }
         }
 
-        var stdout, stderr bytes.Buffer
+        var stderr bytes.Buffer
         err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
-                Stdin:  &buf,
-                Stdout: &stdout,
+                Stdin:  data,
+                Stdout: io.Discard,
                 Stderr: &stderr,
         })
         if err != nil {
-                return fmt.Errorf("failed to upload file: %s", stderr.String())
+                if stderr.Len() > 0 {
+                        return fmt.Errorf("failed to upload file: %w: %s", err, stderr.String())
+                }
+                return fmt.Errorf("failed to upload file: %w", err)
         }
 
         return nil
