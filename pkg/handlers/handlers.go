@@ -39,8 +39,13 @@ type Handler struct {
         readOnly  bool
 }
 
+func parseReadOnlyEnv() bool {
+        v := os.Getenv("KUBE_BROWSER_READ_ONLY")
+        return v == "true" || v == "1"
+}
+
 func New(static, templates embed.FS) *Handler {
-        ro := os.Getenv("KUBE_BROWSER_READ_ONLY") == "true" || os.Getenv("KUBE_BROWSER_READ_ONLY") == "1"
+        ro := parseReadOnlyEnv()
         if ro {
                 log.Printf("Read-only mode enabled: upload endpoints will return 405")
         }

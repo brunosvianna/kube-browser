@@ -119,6 +119,45 @@ func TestReadOnlyModeUploadAllowed(t *testing.T) {
                         t.Error("upload was blocked by read-only mode but readOnly is false")
                 }
         }
+
+        if rr.Code == http.StatusServiceUnavailable {
+                var resp map[string]string
+                json.NewDecoder(rr.Body).Decode(&resp)
+                if resp["error"] == "read-only mode: write operations are disabled" {
+                        t.Error("read-only error returned with unexpected status code")
+                }
+        }
+
+        var resp map[string]string
+        json.NewDecoder(rr.Body).Decode(&resp)
+        if resp["error"] == "read-only mode: write operations are disabled" {
+                t.Errorf("read-only guard fired with readOnly=false, got: %q", resp["error"])
+        }
+}
+
+func TestParseReadOnlyEnv(t *testing.T) {
+        tests := []struct {
+                name     string
+                envVal   string
+                expected bool
+        }{
+                {"true string enables read-only", "true", true},
+                {"1 enables read-only", "1", true},
+                {"false disables read-only", "false", false},
+                {"empty disables read-only", "", false},
+                {"random value disables read-only", "yes", false},
+        }
+
+        for _, tt := range tests {
+                t.Run(tt.name, func(t *testing.T) {
+                        os.Setenv("KUBE_BROWSER_READ_ONLY", tt.envVal)
+                        defer os.Unsetenv("KUBE_BROWSER_READ_ONLY")
+                        got := parseReadOnlyEnv()
+                        if got != tt.expected {
+                                t.Errorf("parseReadOnlyEnv() with KUBE_BROWSER_READ_ONLY=%q = %v, want %v", tt.envVal, got, tt.expected)
+                        }
+                })
+        }
 }
 
 func TestReadOnlyEnvVarParsing(t *testing.T) {
