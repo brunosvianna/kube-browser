@@ -1,0 +1,43 @@
+name: Feature Request
+description: Suggest a new feature or improvement for KubeBrowser
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! KubeBrowser is a focused local tool for browsing Kubernetes PVCs.
+        Please check the [scope section of CONTRIBUTING.md](../blob/main/CONTRIBUTING.md#scope) before submitting — features that require cluster-side components or persistent state are generally out of scope.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem this feature would solve
+      description: Describe the situation where you felt something was missing or painful. Be specific.
+      placeholder: When working with PVCs that use private container registries, I have no way to configure the helper pod to pull images from those registries...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe what you want to happen. How should it work from the user's perspective?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds you have tried, or alternative approaches you considered.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Relevant environment details, cluster type, or use cases that inform this request.
+    validations:
+      required: false

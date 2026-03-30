@@ -1,0 +1,103 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in KubeBrowser
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in as much detail as possible to help us reproduce and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what the bug is.
+      placeholder: When I click "Browse" to select a kubeconfig, the modal stays empty...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Step-by-step instructions to reproduce the behavior.
+      placeholder: |
+        1. Download kube-browser v1.0.11 for linux-amd64
+        2. Run `./kube-browser`
+        3. Click the Connection button
+        4. Click the Browse (folder) icon
+        5. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include any error messages shown in the UI or terminal.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: KubeBrowser version
+      description: Run `kube-browser --version` or check the release you downloaded.
+      placeholder: "v1.0.11"
+    validations:
+      required: true
+
+  - type: input
+    id: k8s_version
+    attributes:
+      label: Kubernetes version
+      description: Run `kubectl version --short` to get this.
+      placeholder: "v1.30.2"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Kubernetes environment
+      options:
+        - AKS (Azure Kubernetes Service)
+        - EKS (Amazon Elastic Kubernetes Service)
+        - GKE (Google Kubernetes Engine)
+        - k3s
+        - minikube
+        - kind
+        - Other managed cluster
+        - Self-hosted
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system where KubeBrowser runs
+      options:
+        - Linux (native)
+        - macOS (Intel)
+        - macOS (Apple Silicon)
+        - Windows (native)
+        - WSL (Windows Subsystem for Linux)
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that might be relevant (container image, RBAC setup, network policies, etc.)
+    validations:
+      required: false
