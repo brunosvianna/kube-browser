@@ -1,0 +1,112 @@
+Revise e ajuste este projeto Go chamado KubeBrowser para deixá-lo mais maduro para uso pela comunidade open source.
+
+Aplique as mudanças diretamente no código e na documentação existente. Preserve a arquitetura atual sempre que possível. Não invente funcionalidades que não existam no projeto e não remova recursos importantes sem necessidade.
+
+Objetivo:
+melhorar robustez, segurança, CI, releases, documentação e experiência de uso.
+
+Faça o seguinte:
+
+1. Alinhe a versão do Go entre:
+- `go.mod`
+- workflows do GitHub Actions
+- documentação
+
+2. Crie um workflow de CI em `.github/workflows/ci.yml` com:
+- checkout
+- setup-go
+- cache de módulos
+- `go test ./...`
+- `go vet ./...`
+- verificação básica de build
+- execução em `push` e `pull_request`
+
+3. Crie ou ajuste um `CHANGELOG.md` na raiz com estrutura:
+- `[Unreleased]`
+- `Added`
+- `Changed`
+- `Fixed`
+- `Security`
+
+4. Crie `docs/releasing.md` explicando:
+- como manter o changelog
+- como subir patch/minor/major
+- como escrever release notes curtas e úteis
+
+5. Revise o workflow de release e melhore a integração com o changelog sem quebrar o processo atual.
+
+6. Endureça o fallback de listagem para evitar problemas com shell escaping e paths com caracteres especiais.
+- Evite `sh -c` com string interpolada insegura.
+- Se não for possível eliminar totalmente, faça escaping correto e documente a limitação.
+
+7. Melhore o helper pod para clusters mais restritivos, adicionando suporte opcional a:
+- `imagePullSecrets`
+- `serviceAccountName`
+- `nodeSelector`
+- `tolerations`
+- labels/annotations extras
+
+Mantenha:
+- resources configuráveis
+- securityContext seguro
+- cleanup robusto
+
+8. Implemente um modo read-only:
+- permitir browse/list/download
+- bloquear upload e escrita
+- ativação por env/config simples
+- refletir isso nas mensagens da API/UI
+- documentar no README
+
+9. Melhore o README com:
+- visão geral clara
+- modo normal vs helper pod
+- RBAC mínimo
+- exemplo namespace-scoped com Role/RoleBinding
+- riscos e limitações
+- ambientes suportados
+- recomendações de produção
+- modo read-only
+- troubleshooting melhor
+
+10. Adicione arquivos de colaboração open source:
+- `.github/pull_request_template.md`
+- `.github/ISSUE_TEMPLATE/bug_report.yml`
+- `.github/ISSUE_TEMPLATE/feature_request.yml`
+- `CONTRIBUTING.md`
+
+11. Adicione testes unitários para o que for possível sem cluster real, com foco em:
+- sanitizePath
+- manipulação de paths
+- parsing de outputs
+- lógica de fallback
+- modo read-only
+
+12. Crie `docs/testing.md` explicando:
+- o que é testável sem cluster
+- o que exige cluster real
+- como validar integração manualmente
+
+13. Melhore mensagens de erro para cenários como:
+- RBAC insuficiente
+- container sem shell/binários
+- helper pod preso em Pending
+- timeout
+- path inválido
+- PVC não montado
+- falha de cleanup
+- modo read-only bloqueando escrita
+
+No final:
+- resuma o que foi alterado
+- liste arquivos criados/alterados
+- explique o que não conseguiu implementar
+- sugira próximos passos
+- mostre um exemplo da próxima release note
+
+Regras:
+- não invente fatos
+- não invente testes que não possam rodar
+- não crie complexidade desnecessária
+- prefira soluções simples, seguras e sustentáveis
+- mantenha o foco do projeto: ferramenta local para inspeção de PVCs em Kubernetes
