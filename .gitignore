@@ -3,3 +3,4 @@ kube-browser
 vendor/
 .replit
 replit.md
+attached_assets/*
